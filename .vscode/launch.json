@@ -1,0 +1,41 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Launch Nexus WMS (Port 3300)",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:3300",
+            "preLaunchTask": "Start Web Server (Python Port 3300)",
+            "webRoot": "${workspaceFolder}/public"
+        },
+        {
+            "name": "Launch Edge (Nexus WMS - Port 3300)",
+            "type": "msedge",
+            "request": "launch",
+            "url": "http://localhost:3300",
+            "preLaunchTask": "Start Web Server (Python Port 3300)",
+            "webRoot": "${workspaceFolder}/public"
+        },
+        {
+            "name": "Open Nexus WMS Directly (No Server Needed)",
+            "type": "chrome",
+            "request": "launch",
+            "file": "${workspaceFolder}/public/index.html"
+        },
+        {
+            "name": "Run Nexus WMS Server (Node.js - Requires Node.js installed)",
+            "type": "node",
+            "request": "launch",
+            "program": "${workspaceFolder}/server.js",
+            "restart": true,
+            "console": "integratedTerminal",
+            "internalConsoleOptions": "neverOpen",
+            "serverReadyAction": {
+                "pattern": "Nexus WMS Server running on: (https?://localhost:\\d+)",
+                "uriFormat": "%s",
+                "action": "openExternally"
+            }
+        }
+    ]
+}

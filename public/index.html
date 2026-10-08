@@ -1,0 +1,1871 @@
+<!DOCTYPE html>
+<html lang="th">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Enterprise WMS: Amazon Storefront & Inbound System (SQLite & Real-Time)</title>
+
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+
+  <!-- External Libraries -->
+  <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://unpkg.com/html5-qrcode"></script>
+
+  <!-- CSS Stylesheets -->
+  <link rel="stylesheet" href="css/style.css?v=20261003_v3">
+  <link rel="stylesheet" href="css/amazon-store.css?v=20261003_v3">
+</head>
+
+<body>
+
+  <!-- Hidden Container for Printing Pick Slips and Barcode Sheets -->
+  <div id="print-section"
+    style="display:none; padding: 20px; font-family: sans-serif; background: white; color: black;"></div>
+
+  <nav>
+    <div class="brand"><span>NEXUS</span>WMS // ENTERPRISE PRO</div>
+    <div class="nav-tabs">
+      <button class="active" onclick="App.navigate('page-store')">🛒 สั่งซื้อ (Storefront)</button>
+      <button onclick="App.navigate('page-hub')">📦 สแกนหยิบ (Picking)</button>
+      <button onclick="App.navigate('page-barcodes')">🏷️ ป้าย Barcode</button>
+      <button onclick="App.navigate('page-pack')">📦 โต๊ะแพ็ก & พิมพ์ใบสั่ง</button>
+      <button onclick="App.navigate('page-procurement')"
+        style="color:var(--accent-orange); border-color:var(--accent-orange); font-weight:600; display:inline-flex; align-items:center; gap:6px;">
+        📋 แผนการสั่งซื้อ (Procurement)
+        <span id="procurement-nav-badge" style="display:none; background:#ef4444; color:white; font-size:10px; font-weight:bold; padding:1px 6px; border-radius:10px;">0</span>
+      </button>
+      <button onclick="App.navigate('page-analytics')">📊 วิเคราะห์ (Analytics)</button>
+      <button onclick="App.navigate('page-worker')">👨‍💻 เข้ากะงาน (Shift)</button>
+      <button onclick="App.navigate('page-inbound')"
+        style="color:var(--accent-cyan); border-color:var(--accent-cyan);">📥 รับเข้า & เติมสต็อก (Inbound)</button>
+    </div>
+
+    <div class="nav-right">
+      <div class="ws-badge" title="สถานะการเชื่อมต่อฐานข้อมูลและซิงค์ข้อมูล Real-time">
+        <div class="status-dot" id="ws-status-dot"></div>
+        <span id="ws-status-text" style="color:var(--text-muted);">Connecting...</span>
+      </div>
+      <div class="operator-badge">
+        <div class="status-dot" id="header-status-dot"></div>
+        <div>
+          <span style="color:var(--text-muted);">Handheld: </span>
+          <strong id="header-user-name" style="color:var(--accent-cyan);">กรุณาเข้ากะ</strong>
+        </div>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Notice Banner for Local/Standalone vs SQLite Server Mode -->
+  <div id="system-notice-banner"
+    style="display:none; background:#1e293b; color:#cbd5e1; font-size:13px; padding:10px 24px; border-bottom:1px solid #334155; align-items:center; justify-content:space-between; box-shadow:0 2px 4px rgba(0,0,0,0.2);">
+    <div style="display:flex; align-items:center; gap:8px;">
+      <span
+        style="background:#f59e0b; color:#000; font-weight:bold; font-size:11px; padding:2px 8px; border-radius:4px;">STANDALONE
+        MODE</span>
+      <span>กำลังเปิดใช้งานแบบ Standalone (มีรูปภาพและข้อมูลสินค้าครบ 50 รายการ พร้อมสั่งซื้อจำลอง)</span>
+      <span style="color:#64748b;">|</span>
+      <span>หากต้องการเชื่อมต่อฐานข้อมูล SQLite ให้ดับเบิลคลิกไฟล์ <code>start.bat</code> แล้วเปิด <a
+          href="http://localhost:3300" target="_blank"
+          style="color:var(--accent-cyan); text-decoration:underline; font-weight:bold;">http://localhost:3300</a></span>
+    </div>
+    <button onclick="document.getElementById('system-notice-banner').style.display='none'"
+      style="background:none; border:none; color:#94a3b8; cursor:pointer; font-size:16px; padding:0 6px;"
+      title="ปิดการแจ้งเตือน">✕</button>
+  </div>
+
+  <div class="container" id="main-container" style="padding: 0;">
+
+    <!-- หน้า 1: Storefront (Amazon Design UI) -->
+    <div id="page-store" class="page active">
+      <!-- Search Bar ประจำหน้าสั่งซื้อ (ค้นหาสินค้าตามชื่อ, รายการ, หรือรหัส SKU) -->
+      <div class="amz-search-header">
+        <div class="amz-store-brand">
+          <span class="amz-brand-icon">🛒</span>
+          <span class="amz-brand-text">NEXUS <span>Store</span></span>
+        </div>
+        <div class="amz-search-box">
+          <div class="amz-search-cat-dropdown">
+            <select id="store-search-category" onchange="Store.onSearchCategoryChange(this.value)"
+              title="เลือกหมวดหมู่">
+              <option value="All">ทุกหมวดหมู่ (All)</option>
+              <option value="อาหารและเครื่องดื่ม">อาหารและเครื่องดื่ม</option>
+              <option value="สุขภาพและความงาม">สุขภาพและความงาม</option>
+              <option value="ของใช้ในบ้าน">ของใช้ในบ้าน</option>
+              <option value="เครื่องใช้ไฟฟ้า">เครื่องใช้ไฟฟ้า</option>
+              <option value="แคมป์ปิ้งและเครื่องมือ">แคมป์ปิ้งและเครื่องมือ</option>
+              <option value="อุปกรณ์ไอที">อุปกรณ์ไอที</option>
+            </select>
+            <span class="dropdown-arrow">▼</span>
+          </div>
+          <div class="amz-search-input-wrapper">
+            <input type="text" id="store-search-input" placeholder="🔍 พิมพ์ค้นหาตามชื่อสินค้า, รายการ, หรือรหัส SKU..."
+              oninput="Store.handleSearch(this.value)" onkeydown="if(event.key==='Enter') Store.executeSearch()"
+              autocomplete="off">
+            <button type="button" class="amz-search-clear-btn" id="store-search-clear" onclick="Store.clearSearch()"
+              style="display:none;" title="ล้างการค้นหา">✕</button>
+          </div>
+          <button type="button" class="amz-search-submit-btn" onclick="Store.executeSearch()" title="ค้นหาสินค้า">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+              stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="11" cy="11" r="8"></circle>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+            </svg>
+          </button>
+        </div>
+        <div class="amz-search-quick-stats">
+          <span id="store-total-sku-count">50 รายการ</span>
+        </div>
+      </div>
+
+      <div class="amz-nav-bar" id="store-filters">
+        <div style="font-weight:bold; margin-right:20px; font-size:16px;">NEXUS Mall</div>
+        <div class="amz-nav-item active" onclick="Store.filterCatalog('All')">All</div>
+        <div class="amz-nav-item" onclick="Store.filterCatalog('อาหารและเครื่องดื่ม')">อาหารและเครื่องดื่ม</div>
+        <div class="amz-nav-item" onclick="Store.filterCatalog('สุขภาพและความงาม')">สุขภาพและความงาม</div>
+        <div class="amz-nav-item" onclick="Store.filterCatalog('ของใช้ในบ้าน')">ของใช้ในบ้าน</div>
+        <div class="amz-nav-item" onclick="Store.filterCatalog('เครื่องใช้ไฟฟ้า')">เครื่องใช้ไฟฟ้า</div>
+        <div class="amz-nav-item" onclick="Store.filterCatalog('แคมป์ปิ้งและเครื่องมือ')">แคมป์ปิ้งและเครื่องมือ</div>
+        <div class="amz-nav-item" onclick="Store.filterCatalog('อุปกรณ์ไอที')">อุปกรณ์ไอที</div>
+      </div>
+
+      <div class="amz-content" id="store-content-area">
+        <!-- Rendered by Store.js -->
+      </div>
+
+      <!-- Order Bar สำหรับ Storefront -->
+      <div class="amz-order-bar">
+        <div>
+          <span style="font-size:18px;">Subtotal (<span id="cart-lbl" style="font-weight:bold;">0 items</span>):</span>
+          <strong style="margin-left:10px; font-size:24px; color:#B12704;">฿<span
+              id="cart-total-price">0.00</span></strong>
+        </div>
+        <div class="order-bar-actions">
+          <button class="btn-action"
+            style="background:#fff; color:var(--amz-link); border:none; text-decoration:underline;"
+            onclick="Store.openCartModal()">Review Cart</button>
+          <button class="amz-btn-checkout" onclick="Store.placeOrder()">Proceed to checkout</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal จัดการตะกร้า -->
+    <div class="modal-overlay" id="cart-modal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3 style="font-size:16px;">🛒 รายการสินค้าในตะกร้า</h3>
+          <button style="background:none; border:none; color:var(--text-muted); font-size:18px; cursor:pointer;"
+            onclick="Store.closeCartModal()">✕</button>
+        </div>
+        <div class="modal-body" id="cart-modal-items"></div>
+        <div class="modal-footer" style="justify-content: space-between; align-items:center;">
+          <h3 style="color:var(--success);">รวมทั้งสิ้น: ฿<span id="modal-total-price">0.00</span></h3>
+          <button class="btn-action" onclick="Store.closeCartModal()">เสร็จสิ้น / ปิดหน้าต่าง</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal แสดงรายละเอียดสินค้าแบบพรีเมียม (Amazon Product Detail View) -->
+    <div class="modal-overlay" id="product-detail-modal" onclick="if(event.target === this) Store.closeProductDetail()">
+      <div class="modal-content" onclick="event.stopPropagation()">
+        <div class="modal-header">
+          <div class="pdetail-breadcrumb">
+            <span>🛒 NEXUS Storefront</span> &rsaquo; <span
+              style="color:#111827; font-weight:600;">รายละเอียดสินค้าและข้อมูลคลัง</span>
+          </div>
+          <button style="background:none; border:none; color:#6b7280; font-size:22px; cursor:pointer; padding: 4px;"
+            onclick="Store.closeProductDetail()">✕</button>
+        </div>
+        <div id="product-detail-container" style="overflow-y:auto; max-height:calc(92vh - 65px);">
+          <!-- Rendered by Store.openProductDetail() -->
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal เปิดกล้อง -->
+    <div class="modal-overlay" id="camera-modal">
+      <div class="modal-content" style="max-width: 400px; text-align:center;">
+        <div class="modal-header">
+          <h3 style="font-size:16px;">📷 สแกนบาร์โค้ด / QR ด้วยกล้อง</h3>
+          <button style="background:none; border:none; color:var(--text-muted); font-size:18px; cursor:pointer;"
+            onclick="App.closeCamera()">✕</button>
+        </div>
+        <div class="modal-body" style="background:#000; padding:10px;">
+          <div id="qr-reader" style="width:100%;"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ==================== WMS BACKEND PAGES ==================== -->
+
+    <!-- หน้า 2: สแกนหยิบ -->
+    <div id="page-hub" class="page">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <div>
+          <h2>สถานีควบคุมการหยิบสินค้า (Zone Picking Hub)</h2>
+          <p style="color: var(--text-muted); font-size: 13px;">ระบบเรียงลำดับการหยิบ (S-Shape) บันทึกลง SQLite
+            และซิงค์แบบ Real-time</p>
+        </div>
+      </div>
+      <div class="hub-layout">
+        <div>
+          <div class="headcount-planner">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+              <h3 style="font-size: 14px; color: var(--text-main);">👥 วิเคราะห์กำลังคน</h3>
+              <span style="font-size:11px; color:var(--text-muted);">ฐานความเร็ว <strong>50 UPH</strong></span>
+            </div>
+            <div class="headcount-grid">
+              <div class="hc-card">
+                <div style="font-size:11px; color:#f87171;">Zone A (Fast)</div>
+                <div class="hc-val" id="hc-a-val" style="color:var(--text-main);">0 คน</div>
+                <div style="font-size:11px; color:var(--text-muted); margin-top:2px;" id="hc-a-desc">ค้าง 0 ชิ้น</div>
+              </div>
+              <div class="hc-card">
+                <div style="font-size:11px; color:#fbbf24;">Zone B (Medium)</div>
+                <div class="hc-val" id="hc-b-val" style="color:var(--text-main);">0 คน</div>
+                <div style="font-size:11px; color:var(--text-muted); margin-top:2px;" id="hc-b-desc">ค้าง 0 ชิ้น</div>
+              </div>
+              <div class="hc-card">
+                <div style="font-size:11px; color:#9ca3af;">Zone C (Slow)</div>
+                <div class="hc-val" id="hc-c-val" style="color:var(--text-main);">0 คน</div>
+                <div style="font-size:11px; color:var(--text-muted); margin-top:2px;" id="hc-c-desc">ค้าง 0 ชิ้น</div>
+              </div>
+            </div>
+          </div>
+          <div class="map-panel">
+            <div class="map-header-bar">
+              <div><span style="font-size: 12px; color: var(--text-muted);">โหมด:</span><strong id="map-mode-title"
+                  style="font-size: 13px; color: var(--accent-cyan); margin-left: 6px;">เฉพาะ Order ปัจจุบัน</strong>
+              </div>
+              <button class="btn-action" onclick="Picking.toggleMultiWaveMode()" id="btn-toggle-multi-wave">⚡ เปิด
+                Parallel Picking</button>
+            </div>
+            <div class="rack-shelf-container">
+              <div class="shelf-header" style="color: #f87171;"><span>RACK-A // โซนสินค้าหมุนเวียนเร็ว</span></div>
+              <div class="shelf-tier" id="shelf-rack-A"></div>
+            </div>
+            <div class="rack-shelf-container">
+              <div class="shelf-header" style="color: #fbbf24;"><span>RACK-B // โซนสินค้าปานกลาง</span></div>
+              <div class="shelf-tier" id="shelf-rack-B"></div>
+            </div>
+            <div class="rack-shelf-container" style="margin-bottom:0;">
+              <div class="shelf-header" style="color: #9ca3af;"><span>RACK-C // โซนสินค้าเคลื่อนไหวช้า</span></div>
+              <div class="shelf-tier" id="shelf-rack-C"></div>
+            </div>
+          </div>
+        </div>
+        <div class="task-console">
+          <div class="scanner-box">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+              <span style="font-size: 12px; font-weight: bold; color: var(--accent-cyan);">⚡ ช่องรับข้อมูลบาร์โค้ด
+                (EAN/QR/CODE128)</span>
+              <span style="font-size:11px; color:var(--text-muted);">ระบบ: <strong style="color:var(--accent-orange);">หยิบหลายชิ้นพร้อมกันได้</strong></span>
+            </div>
+
+            <!-- Multi-piece pick quantity input before barcode scan -->
+            <div style="background:#090d16; border:1px solid #1e293b; border-radius:6px; padding:10px 12px; margin-bottom:10px;">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                <label style="font-size:12px; font-weight:600; color:var(--text-main);">🔢 ใส่จำนวนหยิบก่อนสแกน (Pick Qty):</label>
+                <span style="font-size:11px; color:var(--accent-cyan);">กด +/- หรือเลือกปุ่มด่วน</span>
+              </div>
+              <div style="display:flex; align-items:center; gap:6px;">
+                <button type="button" onclick="Picking.adjustPickQty(-1)" style="width:32px; height:32px; background:#1e293b; border:1px solid var(--border); color:white; border-radius:4px; font-size:16px; font-weight:bold; cursor:pointer;">-</button>
+                <input type="number" id="pick-qty-input" value="1" min="1" max="999" style="width:65px; height:32px; text-align:center; font-size:16px; font-weight:bold; color:var(--accent-orange); background:#000; border:1px solid var(--accent-orange); border-radius:4px;" oninput="Picking.updatePickQtyPresets()">
+                <button type="button" onclick="Picking.adjustPickQty(1)" style="width:32px; height:32px; background:#1e293b; border:1px solid var(--border); color:white; border-radius:4px; font-size:16px; font-weight:bold; cursor:pointer;">+</button>
+
+                <div style="display:flex; gap:4px; margin-left:auto;">
+                  <button type="button" class="pick-qty-preset-btn active" data-qty="1" onclick="Picking.setPickQty(1)">1</button>
+                  <button type="button" class="pick-qty-preset-btn" data-qty="2" onclick="Picking.setPickQty(2)">2</button>
+                  <button type="button" class="pick-qty-preset-btn" data-qty="5" onclick="Picking.setPickQty(5)">5</button>
+                  <button type="button" class="pick-qty-preset-btn" data-qty="10" onclick="Picking.setPickQty(10)">10</button>
+                  <button type="button" class="pick-qty-preset-btn" data-qty="ALL" onclick="Picking.setPickQty('ALL')" style="color:var(--accent-cyan); border-color:var(--accent-cyan); font-size:11px;">หยิบครบ</button>
+                </div>
+              </div>
+            </div>
+
+            <div style="display:flex; gap:8px;">
+              <input type="text" id="scanner-input" style="flex:1;" placeholder="ยิงบาร์โค้ดที่นี่ (จะหยิบตามจำนวนที่ระบุ)..." autofocus>
+              <button class="btn-action"
+                style="background:var(--accent-cyan); color:#000; font-weight:bold; white-space:nowrap;"
+                onclick="App.openCamera(val => { document.getElementById('scanner-input').value = val; Picking.processScannedCode(val); })">📷
+                เปิดกล้อง</button>
+            </div>
+            <div id="scanner-status-log" style="font-size: 11px; color: var(--text-muted); margin-top: 6px;">สถานะ:
+              พร้อมสแกน</div>
+          </div>
+          <div>
+            <h3 style="font-size:15px; margin-bottom:10px;">งานหยิบปัจจุบัน (Optimized Path)</h3>
+            <div class="current-step-box" id="task-step-details">
+              <p style="color: var(--text-muted); font-size: 13px;">ไม่มีคำสั่งซื้อที่ค้างหยิบ</p>
+            </div>
+          </div>
+          <div style="border-top: 1px solid var(--border); padding-top: 16px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+              <h4 style="font-size:13px; color:var(--text-muted);">คิวงานแยกตามโซน</h4><span id="wave-counter"
+                style="font-size:11px; color:var(--accent-cyan);">0 งาน</span>
+            </div>
+            <div id="wave-list-box" style="display:flex; flex-direction:column; gap:8px;"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- หน้า 3: ป้าย Barcode EAN13 -->
+    <div id="page-barcodes" class="page">
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <div>
+          <h2>ป้ายบาร์โค้ด (EAN-13 & QR Code)</h2>
+          <p style="color: var(--text-muted); font-size: 13px; margin-top:4px;">ระบบแปลงรหัสให้เป็นมาตรฐานสากล EAN-13
+            สามารถใช้กล้องมือถือสแกน QR ได้</p>
+        </div>
+        <button class="btn-action" onclick="Barcodes.printBarcodeSheet()">🖨 พิมพ์ป้ายบาร์โค้ดทั้งหมด</button>
+      </div>
+      <div class="barcode-grid" id="barcode-container"></div>
+    </div>
+
+    <!-- หน้า 4: โต๊ะแพ็ก (Put-Wall) & พิมพ์ใบสั่ง -->
+    <div id="page-pack" class="page">
+      <h2>สถานีรวมสินค้าและตรวจบรรจุ (Put-Wall & Order Slip)</h2>
+      <p style="color: var(--text-muted); font-size: 13px; margin-top:4px;">เมื่อกองของครบ สามารถ <strong
+          style="color:var(--accent-cyan);">พิมพ์ใบสั่งเบิกสินค้า (Pick Slip)</strong> ซึ่งจะแสดงราคาสินค้า
+        และกดปิดกล่องได้</p>
+
+      <div style="display:flex; gap:16px; margin-top:16px;">
+        <div
+          style="background:var(--bg-surface); padding:16px 24px; border-radius:var(--radius-md); border:1px solid var(--border); flex:1;">
+          <div style="font-size:12px; color:var(--text-muted);">✅ ออเดอร์จัดส่งแล้วทั้งหมด</div>
+          <div style="font-size:28px; font-weight:800; color:var(--success); margin-top:4px;" id="stat-total-packed">0
+          </div>
+        </div>
+        <div
+          style="background:var(--bg-surface); padding:16px 24px; border-radius:var(--radius-md); border:1px solid var(--border); flex:1;">
+          <div style="font-size:12px; color:var(--text-muted);">⏱️ เวลาเฉลี่ยรวม / 1 ออเดอร์ (Avg Lead Time)</div>
+          <div style="font-size:28px; font-weight:800; color:var(--accent-orange); margin-top:4px;"
+            id="stat-avg-leadtime">00:00</div>
+        </div>
+      </div>
+
+      <h3 style="margin-top: 24px; margin-bottom: 12px; font-size: 16px;">📦 คิวงานรอจัดส่ง (Active Queue)</h3>
+      <div class="dark-table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Order ID</th>
+              <th>ช่อง Put-Wall</th>
+              <th>สถานะการรวมของ</th>
+              <th>Live Timer ⏱️</th>
+              <th>พิมพ์ใบสั่ง / ดำเนินการ</th>
+            </tr>
+          </thead>
+          <tbody id="pack-table-body"></tbody>
+        </table>
+      </div>
+
+      <h3
+        style="margin-top: 32px; margin-bottom: 12px; font-size: 16px; border-bottom: 1px solid var(--border); padding-bottom: 8px;">
+        📋 ประวัติออเดอร์ที่จัดส่งแล้ว (Shipping History - SQLite)</h3>
+      <div class="dark-table-container" style="margin-top: 0;">
+        <table>
+          <thead>
+            <tr>
+              <th>เวลาที่แพ็กเสร็จ</th>
+              <th>Order ID</th>
+              <th>ช่อง Put-Wall</th>
+              <th>รายการสินค้า (Items)</th>
+              <th>เวลาที่ใช้ทั้งหมด (Lead Time)</th>
+            </tr>
+          </thead>
+          <tbody id="history-table-body">
+            <tr>
+              <td colspan="5" style="text-align:center; color:var(--text-muted);">ยังไม่มีประวัติการจัดส่ง</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Modal: ตรวจสอบ QC และปิดกล่อง -->
+      <div id="modal-qc-pack" class="modal-backdrop" style="display:none;">
+        <div class="modal-content">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+            <h3 style="font-size:18px; color:var(--accent-cyan); display:flex; align-items:center; gap:8px;">
+              🛡️ ตรวจสอบคุณภาพสินค้า (QC Inspection)
+            </h3>
+            <button onclick="Pack.closeQCModal()"
+              style="background:none; border:none; color:var(--text-muted); font-size:22px; cursor:pointer;">&times;</button>
+          </div>
+
+          <div
+            style="background:#000; padding:12px 16px; border-radius:8px; border:1px solid var(--border); margin-bottom:16px;">
+            <div style="display:flex; justify-content:space-between; font-size:13px;">
+              <span>Order ID: <strong id="qc-modal-order-id" style="color:var(--text-main);"></strong></span>
+              <span>ช่อง Put-Wall: <strong id="qc-modal-slot" style="color:var(--accent-cyan);"></strong></span>
+            </div>
+          </div>
+
+          <div style="margin-bottom:16px;">
+            <div style="font-size:13px; font-weight:bold; margin-bottom:8px; color:var(--text-muted);">📋
+              รายการสินค้าที่ต้องตรวจนับ (Checklist):</div>
+            <div id="qc-modal-item-list"
+              style="display:flex; flex-direction:column; gap:8px; max-height:180px; overflow-y:auto;"></div>
+          </div>
+
+          <div
+            style="background:var(--bg-surface-soft); padding:16px; border-radius:8px; border:1px solid var(--border); margin-bottom:16px;">
+            <div style="font-size:13px; font-weight:bold; margin-bottom:10px;">ผลการตรวจสอบ QC*:</div>
+            <div style="display:flex; gap:16px; margin-bottom:12px;">
+              <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
+                <input type="radio" name="qc-status" value="PASS" checked onchange="Pack.handleQCStatusChange('PASS')">
+                <span style="color:var(--success); font-weight:bold;">🟢 ผ่าน QC (100% Pass)</span>
+              </label>
+              <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
+                <input type="radio" name="qc-status" value="FAIL" onchange="Pack.handleQCStatusChange('FAIL')">
+                <span style="color:var(--danger); font-weight:bold;">🔴 พบข้อผิดพลาด (Defect)</span>
+              </label>
+            </div>
+
+            <div id="qc-defect-details" style="display:none; margin-top:10px;">
+              <label style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:4px;">ประเภทข้อผิดพลาด (Defect Category)*:</label>
+              <select id="qc-defect-type" onchange="Pack.handleQCDefectChange(this.value)"
+                style="width:100%; background:#000; border:1px solid var(--danger); color:white; padding:8px; border-radius:4px; margin-bottom:10px;">
+                <option value="WRONG_SKU">❌ หยิบสินค้าผิด SKU (Wrong Item)</option>
+                <option value="WRONG_QTY">⚠️ จำนวนสินค้าไม่ตรง / ไม่ครบ (Short/Over Quantity)</option>
+                <option value="DAMAGED_ITEM">📦 สินค้าชำรุด / กล่องบุบแตก (Damaged / Broken)</option>
+                <option value="DEFECTIVE_BARCODE">🏷️ บาร์โค้ดเสียหาย / สแกนไม่ติด (Defective Barcode)</option>
+                <option value="EXPIRED_ITEM">⏳ สินค้าหมดอายุ / เสื่อมสภาพ (Expired Item)</option>
+                <option value="PACKAGING_TORN">🛍️ บรรจุภัณฑ์ฉีกขาด / ซีลหลุด (Damaged Packaging)</option>
+                <option value="WRONG_SLOT">📍 วางผิดช่อง Put-Wall (Wrong Slot)</option>
+                <option value="CUSTOM">📝 กำหนดหัวข้อความผิดพลาดเอง (Custom Category)...</option>
+              </select>
+              <input type="text" id="qc-custom-defect" placeholder="ระบุหัวข้อข้อผิดพลาดเฉพาะที่พบ เช่น สินค้าปนเปื้อน..."
+                style="display:none; width:100%; background:#000; border:1px solid var(--warning); color:var(--warning); padding:8px 12px; border-radius:4px; font-size:13px; margin-bottom:10px;">
+            </div>
+
+            <div style="margin-top:10px;">
+              <label style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:4px;">หมายเหตุ /
+                บันทึกเพิ่มเติม (QC Notes):</label>
+              <input type="text" id="qc-notes" placeholder="เช่น สภาพกล่องสมบูรณ์ หรือ ระบุจุดที่พบปัญหา"
+                style="width:100%; background:#000; border:1px solid var(--border); color:white; padding:8px 12px; border-radius:4px; font-size:13px;">
+            </div>
+
+            <div style="margin-top:10px;">
+              <label style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:4px;">ผู้ตรวจสอบ QC
+                (Inspector):</label>
+              <input type="text" id="qc-inspector" placeholder="ชื่อผู้ตรวจสอบ"
+                style="width:100%; background:#000; border:1px solid var(--border); color:var(--accent-cyan); padding:8px 12px; border-radius:4px; font-size:13px;">
+            </div>
+          </div>
+
+          <div style="display:flex; justify-content:flex-end; gap:10px;">
+            <button onclick="Pack.closeQCModal()" class="btn-action"
+              style="background:transparent; border-color:var(--border); color:var(--text-muted);">ยกเลิก</button>
+            <button onclick="Pack.submitQCAndPack()" class="btn-action"
+              style="background:var(--success); color:white; font-weight:bold; padding:10px 20px;">
+              ✔ บันทึกผล QC & ปิดกล่องส่งออก
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- หน้า 5: Analytics & KPIs -->
+    <div id="page-analytics" class="page">
+      <!-- Modern Executive Analytics Header -->
+      <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:16px; margin-bottom:20px; padding:20px 24px; background:linear-gradient(135deg, rgba(30,41,59,0.7) 0%, rgba(15,23,42,0.85) 100%); border:1px solid rgba(255,255,255,0.08); border-radius:16px; box-shadow:0 10px 30px -5px rgba(0,0,0,0.4);">
+        <div>
+          <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+            <h2 style="margin:0; font-size:20px; font-weight:800; color:#f8fafc; letter-spacing:-0.02em;">📊 ศูนย์วิเคราะห์ข้อมูลและดัชนีชี้วัด (WMS Executive Hub)</h2>
+            <span style="font-size:11px; font-weight:700; background:rgba(16,185,129,0.15); color:#34d399; border:1px solid rgba(16,185,129,0.35); padding:3px 10px; border-radius:9999px; display:inline-flex; align-items:center; gap:5px;">
+              <span style="width:6px; height:6px; border-radius:50%; background:#10b981; box-shadow:0 0 8px #10b981;"></span> LIVE DATA SYNC
+            </span>
+          </div>
+          <p style="color:#94a3b8; font-size:13px; margin-top:6px; line-height:1.4;">
+            วิเคราะห์ความเร็วการจัดเก็บตามหลักสถิติ ABC, ประเมินความถูกต้อง QC, ติดตามรอบเวลาต่อออเดอร์ SLA, และคำนวณผลิตภาพแรงงาน
+          </p>
+        </div>
+        <button class="btn-action"
+          style="background:linear-gradient(135deg, rgba(6,182,212,0.2) 0%, rgba(14,165,233,0.3) 100%); border-color:var(--accent-cyan); color:var(--accent-cyan); font-weight:700; padding:10px 20px; border-radius:8px; display:flex; align-items:center; gap:6px; box-shadow:0 4px 12px rgba(6,182,212,0.2);"
+          onclick="Analytics.refresh()">
+          🔄 รีเฟรชข้อมูลล่าสุด
+        </button>
+      </div>
+
+      <!-- แถบเลือกโหมดแดชบอร์ด (Sub-navigation Pills) -->
+      <div class="subnav-tabs">
+        <button class="subnav-btn active" id="tab-btn-storage" onclick="Analytics.switchTab('storage')">
+          📦 ข้อมูลจัดเก็บ & ชั้นวาง ABC
+        </button>
+        <button class="subnav-btn" id="tab-btn-qc" onclick="Analytics.switchTab('qc')">
+          🛡️ การตรวจสอบคุณภาพ QC
+        </button>
+        <button class="subnav-btn" id="tab-btn-leadtime" onclick="Analytics.switchTab('leadtime')">
+          ⏱️ รอบเวลาเฉลี่ย (Cycle Time & SLA)
+        </button>
+        <button class="subnav-btn" id="tab-btn-labor" onclick="Analytics.switchTab('labor')">
+          👥 ประสิทธิภาพคน (Labor & Capacity)
+        </button>
+        <button class="subnav-btn" id="tab-btn-logs" onclick="Analytics.switchTab('logs')">
+          📜 บันทึกประวัติ & ข้อผิดพลาด (Audit Logs)
+        </button>
+      </div>
+
+      <!-- ================= 1. TAB: ข้อมูลจัดเก็บสินค้า & ชั้นวาง ABC ================= -->
+      <div id="analytics-section-storage" class="analytics-section">
+        <!-- KPI Cards Grid -->
+        <div class="kpi-grid">
+          <div class="kpi-card kpi-red">
+            <div class="kpi-label">🔥 สินค้า Class A (Fast-Moving) <span>~75% Picks</span></div>
+            <div class="kpi-val" id="kpi-sku-class-a" style="color:#f87171;">0 SKU</div>
+            <div class="kpi-sub">ควรอยู่ระดับเอว-สายตา (Golden Zone ชั้น 2-3)</div>
+          </div>
+          <div class="kpi-card kpi-yellow">
+            <div class="kpi-label">⚡ สินค้า Class B (Medium-Moving) <span>~17% Picks</span></div>
+            <div class="kpi-val" id="kpi-sku-class-b" style="color:#fbbf24;">0 SKU</div>
+            <div class="kpi-sub">เหมาะสำหรับชั้น 1 (พื้น) หรือชั้น 4</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">💤 สินค้า Class C (Slow-Moving) <span>~8% Picks</span></div>
+            <div class="kpi-val" id="kpi-sku-class-c" style="color:#94a3b8;">0 SKU</div>
+            <div class="kpi-sub">ควรเก็บชั้นบนสุด (ชั้น 4) หรือโซนหลังคลัง</div>
+          </div>
+          <div class="kpi-card kpi-green">
+            <div class="kpi-label">⭐ Golden Zone Compliance <span>ความถูกต้อง</span></div>
+            <div class="kpi-val" id="kpi-golden-zone-ratio" style="color:#34d399;">0%</div>
+            <div class="kpi-sub">สินค้าหยิบบ่อยที่อยู่ในชั้นวางระดับเอว-สายตา</div>
+          </div>
+        </div>
+
+        <!-- Pareto Velocity Distribution Bar -->
+        <div style="background:linear-gradient(145deg, rgba(30,41,59,0.5) 0%, rgba(15,23,42,0.7) 100%); border:1px solid rgba(255,255,255,0.06); border-radius:12px; padding:14px 18px; margin-bottom:20px; box-shadow:0 4px 15px rgba(0,0,0,0.2);">
+          <div style="display:flex; justify-content:space-between; align-items:center; font-size:12px; margin-bottom:8px; flex-wrap:wrap; gap:6px;">
+            <span style="font-weight:700; color:#cbd5e1;">สัดส่วนยอดหยิบตามกฎความเร็ว Pareto (Pick Velocity Distribution):</span>
+            <div style="display:flex; gap:14px; font-size:11px;">
+              <span style="color:#f87171; font-weight:600;">● Class A: 75%</span>
+              <span style="color:#fbbf24; font-weight:600;">● Class B: 17%</span>
+              <span style="color:#94a3b8; font-weight:600;">● Class C: 8%</span>
+            </div>
+          </div>
+          <div style="height:8px; border-radius:9999px; overflow:hidden; display:flex; background:#1e293b;">
+            <div style="width:75%; background:linear-gradient(90deg, #ef4444, #f87171);" title="Class A"></div>
+            <div style="width:17%; background:linear-gradient(90deg, #f59e0b, #fbbf24);" title="Class B"></div>
+            <div style="width:8%; background:linear-gradient(90deg, #64748b, #94a3b8);" title="Class C"></div>
+          </div>
+        </div>
+
+        <div class="dashboard-grid">
+          <div class="chart-container">
+            <div class="chart-header">
+              <h3>📊 สัดส่วนความถี่การหยิบแยกตามโซน & ABC</h3>
+              <span class="chart-header-badge" id="chart-total-picks">0 picks</span>
+            </div>
+            <div style="width: 100%; max-width: 320px; margin-top:8px;"><canvas id="pickFrequencyChart"></canvas></div>
+          </div>
+          <div class="chart-container" style="align-items: flex-start; overflow-y: auto; max-height: 420px;">
+            <div class="chart-header">
+              <h3>🔥 Top 5 สินค้าหยิบบ่อยสุด (Fast-Movers)</h3>
+              <span class="chart-header-badge" style="background:rgba(239,68,68,0.12); color:#fca5a5; border-color:rgba(239,68,68,0.3);">High Velocity</span>
+            </div>
+            <div id="top-sku-list" style="width: 100%; display: flex; flex-direction: column; gap: 8px;"></div>
+          </div>
+        </div>
+
+        <!-- ตัวกรองตารางสินค้าจัดเก็บ -->
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:14px; background:rgba(15,23,42,0.6); padding:10px 14px; border-radius:12px; border:1px solid rgba(255,255,255,0.06);">
+          <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <button class="btn-action filter-storage-btn active" style="padding:6px 14px; font-size:12px; border-radius:6px;"
+              onclick="Analytics.filterStorage('ALL')">ทั้งหมด</button>
+            <button class="btn-action filter-storage-btn"
+              style="padding:6px 14px; font-size:12px; border-radius:6px; background:rgba(239,68,68,0.15); color:#f87171; border-color:rgba(239,68,68,0.35);"
+              onclick="Analytics.filterStorage('A')">Class A (ขายดี)</button>
+            <button class="btn-action filter-storage-btn"
+              style="padding:6px 14px; font-size:12px; border-radius:6px; background:rgba(245,158,11,0.15); color:#fbbf24; border-color:rgba(245,158,11,0.35);"
+              onclick="Analytics.filterStorage('B')">Class B (ปานกลาง)</button>
+            <button class="btn-action filter-storage-btn"
+              style="padding:6px 14px; font-size:12px; border-radius:6px; background:rgba(148,163,184,0.15); color:#cbd5e1; border-color:rgba(148,163,184,0.35);"
+              onclick="Analytics.filterStorage('C')">Class C (หมุนช้า)</button>
+            <button class="btn-action filter-storage-btn"
+              style="padding:6px 14px; font-size:12px; border-radius:6px; background:rgba(6,182,212,0.15); color:var(--accent-cyan); border-color:rgba(6,182,212,0.35);"
+              onclick="Analytics.filterStorage('GOLDEN')">⭐ เฉพาะ Golden Zone</button>
+            <button class="btn-action filter-storage-btn"
+              style="padding:6px 14px; font-size:12px; border-radius:6px; background:rgba(239,68,68,0.12); color:#fca5a5; border-color:rgba(239,68,68,0.3);"
+              onclick="Analytics.filterStorage('WARN')">⚠️ แนะนำย้ายชั้นวาง</button>
+          </div>
+          <div style="min-width:260px;">
+            <input type="text" id="storage-search-input" placeholder="🔍 ค้นหาชื่อสินค้า, SKU, หรือ ชั้นวาง..."
+              oninput="Analytics.searchStorage(this.value)"
+              style="width:100%; background:#030712; border:1px solid rgba(255,255,255,0.12); color:white; padding:8px 12px; border-radius:6px; font-size:12.5px;">
+          </div>
+        </div>
+
+        <div class="dark-table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>SKU ID / EAN-13</th>
+                <th>ชื่อสินค้า</th>
+                <th>พิกัดชั้นวาง (Location)</th>
+                <th>ระดับชั้นวาง (Shelf Level)</th>
+                <th>คงเหลือ (Pick Face)</th>
+                <th>ยอดหยิบรวม</th>
+                <th>ABC Group</th>
+                <th>การวิเคราะห์จัดวาง (Slotting Recommendation)</th>
+              </tr>
+            </thead>
+            <tbody id="analytics-table-body"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ================= 2. TAB: KPI QC & ความแม่นยำ ================= -->
+      <div id="analytics-section-qc" class="analytics-section" style="display:none;">
+        <div class="kpi-grid">
+          <div class="kpi-card kpi-green">
+            <div class="kpi-label">🎯 อัตราผ่าน QC (QC Pass Rate) <span>เป้าหมาย ≥ 98%</span></div>
+            <div class="kpi-val" id="kpi-qc-pass-rate" style="color:#34d399;">100%</div>
+            <div class="kpi-sub" id="kpi-qc-pass-sub">ตรวจผ่าน 0 จาก 0 ออเดอร์</div>
+          </div>
+          <div class="kpi-card kpi-orange">
+            <div class="kpi-label">📦 ออเดอร์ที่ตรวจ QC แล้ว <span>(Inspected)</span></div>
+            <div class="kpi-val" id="kpi-qc-total-inspected">0</div>
+            <div class="kpi-sub">ได้รับการตรวจสอบความถูกต้องก่อนปิดกล่อง</div>
+          </div>
+          <div class="kpi-card kpi-red">
+            <div class="kpi-label">⚠️ ข้อผิดพลาดที่พบ (QC Defects) <span>(Defects)</span></div>
+            <div class="kpi-val" id="kpi-qc-total-defects" style="color:#f87171;">0</div>
+            <div class="kpi-sub" id="kpi-qc-defect-rate">อัตราผิดพลาด: 0.0%</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">🛡️ ความถูกต้องในการหยิบ <span>(Pick Accuracy)</span></div>
+            <div class="kpi-val" id="kpi-qc-accuracy" style="color:#38bdf8;">100%</div>
+            <div class="kpi-sub">อิงจากความถูกต้องของ SKU และจำนวน</div>
+          </div>
+        </div>
+
+        <div class="dashboard-grid">
+          <div class="chart-container">
+            <div class="chart-header">
+              <h3>🛡️ สัดส่วนผลการตรวจสอบ QC</h3>
+              <span class="chart-header-badge" style="background:rgba(16,185,129,0.15); color:#34d399; border-color:rgba(16,185,129,0.3);">Quality Ratio</span>
+            </div>
+            <div style="width: 100%; max-width: 280px; margin-top:10px;"><canvas id="qcRatioChart"></canvas></div>
+          </div>
+          <div class="chart-container">
+            <div class="chart-header">
+              <h3>⚠️ จำแนกประเภทข้อบกพร่อง (Defect Breakdown)</h3>
+              <span class="chart-header-badge" style="background:rgba(239,68,68,0.15); color:#fca5a5; border-color:rgba(239,68,68,0.3);">Categories</span>
+            </div>
+            <div style="width: 100%; max-width: 380px; margin-top:10px;"><canvas id="qcDefectChart"></canvas></div>
+          </div>
+        </div>
+
+        <div class="dark-table-container">
+          <div style="padding:14px 18px; font-weight:bold; border-bottom:1px solid rgba(255,255,255,0.08); display:flex; justify-content:space-between; align-items:center;">
+            <span style="font-size:14px; color:#f8fafc;">📋 บันทึกประวัติการตรวจสอบคุณภาพ (QC Inspection Logs - SQLite)</span>
+            <span style="font-size:12px; color:#94a3b8;">บันทึกจริงทุกครั้งที่มีการตรวจนับและปิดกล่อง</span>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>เวลาที่ตรวจ</th>
+                <th>Order ID</th>
+                <th>สถานะ QC</th>
+                <th>ประเภทข้อบกพร่อง (Defect Type)</th>
+                <th>ชิ้นที่ตรวจ</th>
+                <th>ผู้ตรวจสอบ (Inspector)</th>
+                <th>หมายเหตุ (Notes)</th>
+                <th style="text-align:center;">จัดการ (Action)</th>
+              </tr>
+            </thead>
+            <tbody id="qc-logs-table-body">
+              <tr>
+                <td colspan="8" style="text-align:center; color:var(--text-muted); padding:20px;">ยังไม่มีประวัติการตรวจ QC</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ================= 3. TAB: KPI เวลาต่อ 1 Order (Cycle Time & SLA) ================= -->
+      <div id="analytics-section-leadtime" class="analytics-section" style="display:none;">
+        <div class="kpi-grid">
+          <div class="kpi-card kpi-orange">
+            <div class="kpi-label">⏱️ เวลาเฉลี่ยรวม / 1 Order <span>(Avg Cycle Time)</span></div>
+            <div class="kpi-val" id="kpi-order-avg-time" style="color:var(--accent-orange);">00:00</div>
+            <div class="kpi-sub">ตั้งแต่รับคำสั่งซื้อ -> สแกนหยิบ -> ตรวจ QC -> ปิดกล่อง</div>
+          </div>
+          <div class="kpi-card kpi-green">
+            <div class="kpi-label">🎯 อัตราทันเป้า SLA (≤ 3 นาที) <span>(SLA Compliance)</span></div>
+            <div class="kpi-val" id="kpi-order-sla-rate" style="color:var(--success);">100%</div>
+            <div class="kpi-sub">เกณฑ์มาตรฐานสากล: ไม่เกิน 3:00 นาที/Order</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">⚡ ออเดอร์ที่เร็วที่สุด <span>(Fastest Pick & Pack)</span></div>
+            <div class="kpi-val" id="kpi-order-fastest" style="color:var(--accent-cyan);">00:00</div>
+            <div class="kpi-sub">สถิติความเร็วสูงสุดในกะงาน</div>
+          </div>
+          <div class="kpi-card kpi-yellow">
+            <div class="kpi-label">🐢 ออเดอร์ที่ช้าที่สุด <span>(Slowest Bottleneck)</span></div>
+            <div class="kpi-val" id="kpi-order-slowest" style="color:var(--warning);">00:00</div>
+            <div class="kpi-sub">จุดที่อาจเกิดคอขวด เช่น รอรวมหลายโซน</div>
+          </div>
+        </div>
+
+        <div class="dashboard-grid" style="margin-bottom:24px;">
+          <div class="chart-container">
+            <div class="chart-header">
+              <h3>📈 การกระจายตัวของเวลาการทำงาน (Lead Time Distribution)</h3>
+              <span class="chart-header-badge" style="background:rgba(6,182,212,0.12); color:#22d3ee; border-color:rgba(6,182,212,0.25);">SLA Target ≤3m</span>
+            </div>
+            <p style="color:var(--text-muted); font-size:12px; margin-bottom:12px; text-align:center;">
+              จำแนกตามช่วงเวลาเป้าหมาย SLA (ความเร็วในการประมวลผลคำสั่งซื้อ)
+            </p>
+            <div style="width: 100%; max-width: 380px;"><canvas id="leadTimeDistChart"></canvas></div>
+          </div>
+          <div class="chart-container" style="align-items:flex-start;">
+            <div class="chart-header" style="width:100%;">
+              <h3>🚦 เกณฑ์การประเมิน SLA และความเร็ว</h3>
+              <span class="chart-header-badge" style="background:rgba(148,163,184,0.12); color:#94a3b8; border-color:rgba(148,163,184,0.25);">Benchmark Standards</span>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:12px; width:100%; margin-top:8px;">
+              <div style="background:rgba(16, 185, 129, 0.08); border:1px solid rgba(16, 185, 129, 0.3); padding:14px 18px; border-radius:10px; display:flex; align-items:flex-start; gap:12px;">
+                <div style="font-size:20px; line-height:1;">🟢</div>
+                <div>
+                  <div style="color:#34d399; font-weight:700; font-size:14px; display:flex; align-items:center; gap:8px;">
+                    SLA Passed: เร็วกว่า 3:00 นาที
+                    <span style="background:rgba(16,185,129,0.2); color:#34d399; font-size:11px; padding:2px 8px; border-radius:999px;">Optimal</span>
+                  </div>
+                  <div style="color:var(--text-muted); font-size:12px; margin-top:4px; line-height:1.5;">การจัดการมีประสิทธิภาพสูงสุด สินค้าพร้อมแพ็กจัดส่งทันที เหมาะสำหรับ Express Delivery</div>
+                </div>
+              </div>
+              <div style="background:rgba(245, 158, 11, 0.08); border:1px solid rgba(245, 158, 11, 0.3); padding:14px 18px; border-radius:10px; display:flex; align-items:flex-start; gap:12px;">
+                <div style="font-size:20px; line-height:1;">🟡</div>
+                <div>
+                  <div style="color:#fbbf24; font-weight:700; font-size:14px; display:flex; align-items:center; gap:8px;">
+                    SLA Warning: 3:00 - 5:00 นาที
+                    <span style="background:rgba(245,158,11,0.2); color:#fbbf24; font-size:11px; padding:2px 8px; border-radius:999px;">Standard</span>
+                  </div>
+                  <div style="color:var(--text-muted); font-size:12px; margin-top:4px; line-height:1.5;">อยู่ในเกณฑ์ปกติ มักเกิดจากออเดอร์มีหลาย SKU หรือต้องรอสินค้าจากต่างโซนมาประกอบกันที่ Put-Wall</div>
+                </div>
+              </div>
+              <div style="background:rgba(239, 68, 68, 0.08); border:1px solid rgba(239, 68, 68, 0.3); padding:14px 18px; border-radius:10px; display:flex; align-items:flex-start; gap:12px;">
+                <div style="font-size:20px; line-height:1;">🔴</div>
+                <div>
+                  <div style="color:#f87171; font-weight:700; font-size:14px; display:flex; align-items:center; gap:8px;">
+                    SLA Breached: เกินกว่า 5:00 นาที
+                    <span style="background:rgba(239,68,68,0.2); color:#f87171; font-size:11px; padding:2px 8px; border-radius:999px;">Attention</span>
+                  </div>
+                  <div style="color:var(--text-muted); font-size:12px; margin-top:4px; line-height:1.5;">เกิดความล่าช้า หรือพบสินค้าชำรุดระหว่างตรวจ QC แนะนำให้พิจารณาจัด Slotting ใหม่เพื่อย่นระยะเดินหยิบ</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="dark-table-container">
+          <div style="padding:14px 18px; font-weight:bold; border-bottom:1px solid rgba(255,255,255,0.08); display:flex; justify-content:space-between; align-items:center;">
+            <span style="font-size:14px; color:#f8fafc;">📦 รายการออเดอร์พร้อมเวลาประมวลผลจริงและผลประเมิน SLA</span>
+            <span style="font-size:12px; color:#94a3b8;">เรียงลำดับจากล่าสุด</span>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>Order ID</th>
+                <th>ช่อง Put-Wall</th>
+                <th>รายการสินค้า</th>
+                <th>เวลาที่ใช้จริง</th>
+                <th>ผลประเมิน SLA</th>
+                <th>วันที่และเวลา</th>
+              </tr>
+            </thead>
+            <tbody id="order-leadtime-table-body"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ================= 4. TAB: ติดตามคน & คำนวณการทำงาน ================= -->
+      <div id="analytics-section-labor" class="analytics-section" style="display:none;">
+        <div class="kpi-grid">
+          <div class="kpi-card kpi-orange">
+            <div class="kpi-label">👷 พนักงานที่กำลังเข้ากะ <span>(Active Headcount)</span></div>
+            <div class="kpi-val" id="kpi-labor-active-workers" style="color:var(--accent-orange);">0 คน</div>
+            <div class="kpi-sub" id="kpi-labor-total-workers">จากพนักงานทั้งหมด 0 คน</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">⌛ ชั่วโมงแรงงานรวม <span>(Total Man-Hours)</span></div>
+            <div class="kpi-val" id="kpi-labor-total-hours">0.0 ชม.</div>
+            <div class="kpi-sub">เวลารวมของพนักงานทุกคนสะสม</div>
+          </div>
+          <div class="kpi-card kpi-green">
+            <div class="kpi-label">⚡ Warehouse UPH <span>(Units Per Hour)</span></div>
+            <div class="kpi-val" id="kpi-labor-uph" style="color:var(--success);">0.0</div>
+            <div class="kpi-sub">จำนวนชิ้นที่หยิบได้เฉลี่ยต่อ 1 คน-ชม.</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">📦 OPMH (Orders / Man-Hour) <span>(Productivity)</span></div>
+            <div class="kpi-val" id="kpi-labor-opmh" style="color:var(--accent-cyan);">0.0</div>
+            <div class="kpi-sub">จำนวนออเดอร์ปิดกล่องสำเร็จต่อ 1 คน-ชม.</div>
+          </div>
+        </div>
+
+        <!-- กล่องคำนวณการทำงานและการใช้คน (Interactive Labor & Capacity Calculator) -->
+        <div class="calc-box">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; border-bottom:1px solid rgba(255,255,255,0.08); padding-bottom:16px;">
+            <div>
+              <h3 style="font-size:16px; color:#38bdf8; display:flex; align-items:center; gap:8px; font-weight:700;">
+                🧮 Labor Capacity & Workload Simulation Studio
+              </h3>
+              <p style="font-size:12px; color:var(--text-muted); margin-top:3px;">
+                จำลองกำลังคน วางแผนกะงาน คำนวณชั่วโมงที่ต้องใช้ และประเมินความสามารถในการรับคำสั่งซื้อแบบไดนามิก
+              </p>
+            </div>
+            <span style="font-size:11px; background:rgba(56, 189, 248, 0.12); color:#38bdf8; border:1px solid rgba(56, 189, 248, 0.3); padding:4px 10px; border-radius:999px; font-weight:600; display:flex; align-items:center; gap:6px;">
+              <span style="width:6px; height:6px; border-radius:50%; background:#38bdf8; display:inline-block;"></span>
+              Real-time Simulation
+            </span>
+          </div>
+
+          <div class="calc-grid">
+            <div class="calc-input-group">
+              <label>🎯 เป้าหมายคำสั่งซื้อ (Target Orders)*</label>
+              <input type="number" id="calc-target-orders" value="100" min="1" oninput="Analytics.calculateLabor()">
+            </div>
+            <div class="calc-input-group">
+              <label>👷 จำนวนพนักงานที่มี (Workers Available)*</label>
+              <input type="number" id="calc-workers-count" value="3" min="1" oninput="Analytics.calculateLabor()">
+            </div>
+            <div class="calc-input-group">
+              <label>⏱️ ชั่วโมงทำงานต่อคน (Hours / Shift)*</label>
+              <input type="number" id="calc-shift-hours" value="8" min="0.5" step="0.5" oninput="Analytics.calculateLabor()">
+            </div>
+            <div class="calc-input-group">
+              <label>⚡ ความเร็วหยิบเฉลี่ย (Est. UPH)*</label>
+              <input type="number" id="calc-avg-uph" value="35" min="1" oninput="Analytics.calculateLabor()">
+            </div>
+          </div>
+
+          <!-- ผลลัพธ์การคำนวณ -->
+          <div class="calc-result-box">
+            <div style="background:rgba(15,23,42,0.6); padding:16px; border-radius:10px; border:1px solid rgba(255,255,255,0.06);">
+              <div style="font-size:12px; color:var(--text-muted); font-weight:600;">กำลังการผลิตสูงสุด (Max Output)</div>
+              <div id="calc-res-capacity" style="font-size:24px; font-weight:800; color:var(--accent-cyan); margin-top:6px; letter-spacing:-0.5px;">140 Orders</div>
+              <div style="font-size:12px; color:#94a3b8; margin-top:2px;" id="calc-res-units">รองรับได้ ~840 ชิ้น</div>
+            </div>
+            <div style="background:rgba(15,23,42,0.6); padding:16px; border-radius:10px; border:1px solid rgba(255,255,255,0.06);">
+              <div style="font-size:12px; color:var(--text-muted); font-weight:600;">เวลารวมที่ต้องใช้ (Total Man-Hours)</div>
+              <div id="calc-res-manhours" style="font-size:24px; font-weight:800; color:#f8fafc; margin-top:6px; letter-spacing:-0.5px;">17.1 ชม.</div>
+              <div style="font-size:12px; color:#94a3b8; margin-top:2px;" id="calc-res-time-per-order">เฉลี่ย 10.3 นาที/คน/Order</div>
+            </div>
+            <div style="background:rgba(15,23,42,0.6); padding:16px; border-radius:10px; border:1px solid rgba(255,255,255,0.06);">
+              <div style="font-size:12px; color:var(--text-muted); font-weight:600;">ชั่วโมงทำงานจริงต่อคน</div>
+              <div id="calc-res-hours-per-person" style="font-size:24px; font-weight:800; color:var(--accent-orange); margin-top:6px; letter-spacing:-0.5px;">5.7 ชม./คน</div>
+              <div style="font-size:12px; color:#94a3b8; margin-top:2px;">จากกะงาน 8 ชั่วโมง</div>
+            </div>
+            <div style="grid-column: 1 / -1; background:rgba(15,23,42,0.8); padding:16px 20px; border-radius:10px; border:1px solid rgba(255,255,255,0.08); display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;">
+              <div id="calc-res-status" style="font-size:14px; font-weight:700; color:var(--success); display:flex; align-items:center; gap:8px;">
+                🟢 กำลังคนเพียงพอ! สามารถรองรับได้เกินเป้าหมาย (+40%)
+              </div>
+              <div id="calc-res-advice" style="font-size:12px; color:#94a3b8;">
+                ใช้กำลังคนอย่างมีประสิทธิภาพ มีเวลาเผื่อรองรับออเดอร์ด่วน
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="dark-table-container" style="margin-top:24px;">
+          <div style="padding:14px 18px; font-weight:bold; border-bottom:1px solid rgba(255,255,255,0.08); display:flex; justify-content:space-between; align-items:center;">
+            <span style="font-size:14px; color:#f8fafc;">🏆 ตารางวัดผลประสิทธิภาพรายบุคคล (Individual Worker Productivity Matrix)</span>
+            <span style="font-size:12px; color:#94a3b8;">UPH = ชิ้นที่หยิบ / ชั่วโมงทำงานจริง</span>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>รหัสพนักงาน</th>
+                <th>ชื่อ-นามสกุล</th>
+                <th>สถานะกะงาน</th>
+                <th>ชั่วโมงทำงานสะสม</th>
+                <th>ชิ้นที่หยิบรวม</th>
+                <th>ความเร็วส่วนบุคคล (UPH)</th>
+                <th>ระดับเกรดการทำงาน (Performance)</th>
+              </tr>
+            </thead>
+            <tbody id="labor-workers-table-body"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ================= 5. TAB: บันทึกประวัติและข้อผิดพลาด (Audit Logs & Defect Manager) ================= -->
+      <div id="analytics-section-logs" class="analytics-section" style="display:none;">
+        <div class="kpi-grid">
+          <div class="kpi-card">
+            <div class="kpi-label">📋 บันทึกประวัติทั้งหมด <span>(Total Logs)</span></div>
+            <div class="kpi-val" id="audit-count-total">0</div>
+            <div class="kpi-sub">รายการตรวจประเมินทั้งหมดในระบบ</div>
+          </div>
+          <div class="kpi-card kpi-green">
+            <div class="kpi-label">✅ ผ่านเกณฑ์ QC <span>(Passed Checks)</span></div>
+            <div class="kpi-val" id="audit-count-pass" style="color:var(--success);">0</div>
+            <div class="kpi-sub">ออเดอร์สมบูรณ์ ไม่มีข้อบกพร่อง</div>
+          </div>
+          <div class="kpi-card kpi-red">
+            <div class="kpi-label">❌ พบข้อบกพร่อง / แก้ไข <span>(Defects Found)</span></div>
+            <div class="kpi-val" id="audit-count-fail" style="color:var(--danger);">0</div>
+            <div class="kpi-sub">รายการที่มีข้อผิดพลาดและระบุหมวดหมู่</div>
+          </div>
+          <div class="kpi-card kpi-orange">
+            <div class="kpi-label">📊 อัตราข้อผิดพลาด <span>(Defect Rate)</span></div>
+            <div class="kpi-val" id="audit-count-rate" style="color:var(--accent-orange);">0.0%</div>
+            <div class="kpi-sub">คำนวณอัตโนมัติแบบเรียลไทม์</div>
+          </div>
+        </div>
+
+        <div class="dark-table-container" style="margin-top:20px;">
+          <!-- Filter Toolbar -->
+          <div style="padding:14px 18px; border-bottom:1px solid rgba(255,255,255,0.08); display:flex; gap:12px; flex-wrap:wrap; align-items:center; justify-content:space-between; background:rgba(15,23,42,0.6);">
+            <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+              <span style="font-size:12px; font-weight:600; color:var(--text-muted); margin-right:4px;">สถานะ:</span>
+              <button id="filter-btn-all" class="btn-subnav filter-log-status-btn active" style="padding:6px 14px; font-size:12px;" onclick="Analytics.filterLogs('ALL')">ทั้งหมด</button>
+              <button id="filter-btn-pass" class="btn-subnav filter-log-status-btn" style="padding:6px 14px; font-size:12px;" onclick="Analytics.filterLogs('PASS')">✅ ผ่าน (PASS)</button>
+              <button id="filter-btn-fail" class="btn-subnav filter-log-status-btn" style="padding:6px 14px; font-size:12px;" onclick="Analytics.filterLogs('FAIL')">❌ พบปัญหา (FAIL)</button>
+              
+              <span style="font-size:12px; font-weight:600; color:var(--text-muted); margin-left:12px; margin-right:4px;">หมวดหมู่ข้อผิดพลาด:</span>
+              <select id="filter-defect-select" onchange="Analytics.filterLogDefect(this.value)" style="background:rgba(15,23,42,0.9); border:1px solid rgba(255,255,255,0.15); color:white; padding:6px 12px; border-radius:6px; font-size:12px; outline:none;">
+                <option value="ALL">ทุกประเภทข้อบกพร่อง</option>
+                <option value="WRONG_SKU">❌ สินค้าผิดรายการ (Wrong SKU)</option>
+                <option value="WRONG_QTY">🔢 จำนวนไม่ตรง (Short/Over Qty)</option>
+                <option value="DAMAGED_ITEM">💥 สินค้าชำรุด/แตกหัก (Damaged Item)</option>
+                <option value="DEFECTIVE_BARCODE">🏷️ บาร์โค้ดเสียหาย/สแกนไม่ติด (Defective Barcode)</option>
+                <option value="EXPIRED_ITEM">⏳ สินค้าหมดอายุ/ใกล้หมดอายุ (Expired)</option>
+                <option value="PACKAGING_TORN">📦 กล่อง/บรรจุภัณฑ์ฉีกขาด (Packaging Torn)</option>
+                <option value="WRONG_SLOT">📍 หยิบผิดตำแหน่ง/เชลฟ์ (Wrong Slot)</option>
+                <option value="CUSTOM">📝 ข้อผิดพลาดกำหนดเอง (Custom)</option>
+              </select>
+            </div>
+
+            <div style="display:flex; gap:8px; align-items:center;">
+              <input type="text" id="audit-search-input" placeholder="🔍 ค้นหา Order ID, ผู้ตรวจ, ข้อความ..." oninput="Analytics.searchLogs(this.value)" style="background:rgba(15,23,42,0.9); border:1px solid rgba(255,255,255,0.15); color:white; padding:7px 14px; border-radius:6px; font-size:12px; min-width:260px; outline:none;">
+              <button class="btn-action" style="padding:7px 14px; font-size:12px; background:rgba(30,41,59,0.8); border:1px solid rgba(255,255,255,0.12); border-radius:6px; cursor:pointer;" onclick="Analytics.refreshAuditLogs()">🔄 รีเฟรช</button>
+            </div>
+          </div>
+
+          <!-- Audit Table -->
+          <table>
+            <thead>
+              <tr>
+                <th style="width:140px;">เวลาที่ตรวจ</th>
+                <th style="width:110px;">Order ID</th>
+                <th style="width:90px;">สถานะ QC</th>
+                <th>ประเภทข้อบกพร่อง (Defect Category)</th>
+                <th style="width:80px; text-align:center;">จำนวนตรวจ</th>
+                <th>ผู้ตรวจสอบ (Inspector)</th>
+                <th>หมายเหตุ / บันทึก (Notes)</th>
+                <th style="width:140px; text-align:center;">จัดการข้อผิดพลาด</th>
+              </tr>
+            </thead>
+            <tbody id="audit-logs-table-body">
+              <tr>
+                <td colspan="8" style="text-align:center; color:var(--text-muted); padding:24px;">ยังไม่มีประวัติการบันทึก</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- หน้า 6: Worker Shift -->
+    <div id="page-worker" class="page">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <div>
+          <h2>ระบบบันทึกเวลาทำงานพนักงาน (Multi-User Auto Prefix)</h2>
+          <p style="color: var(--text-muted); font-size: 13px;">พิมพ์แค่ตัวเลขรหัส (เช่น 001, 045) ระบบจะเติมคำนำหน้า
+            <strong>NEXUS-</strong> ให้ทันที
+          </p>
+        </div>
+      </div>
+      <div
+        style="background:var(--bg-surface); border:1px solid var(--border); border-radius:var(--radius-md); padding:20px; margin-top:16px; display:flex; gap:12px; align-items:flex-end; flex-wrap:wrap;">
+        <div style="display:flex; flex-direction:column; gap:4px;">
+          <label style="font-size:12px; color:var(--text-muted);">รหัสตัวเลข (ID)*</label>
+          <input type="text" id="input-staff-id" placeholder="พิมพ์แค่ตัวเลข เช่น 001"
+            style="background:#000; border:1px solid var(--border); color:var(--accent-cyan); padding:8px 12px; border-radius:4px; font-family:monospace; font-size:14px;">
+        </div>
+        <div style="display:flex; flex-direction:column; gap:4px; flex:1; min-width:200px;">
+          <label style="font-size:12px; color:var(--text-muted);">ชื่อ-นามสกุล (ถ้ามีในระบบแล้วไม่ต้องพิมพ์)</label>
+          <input type="text" id="input-staff-name" placeholder="ระบุชื่อพนักงานใหม่"
+            style="background:#000; border:1px solid var(--border); color:white; padding:8px 12px; border-radius:4px; font-size:14px;">
+        </div>
+        <button class="btn-action" style="background:var(--success); color:white; padding:10px 20px;"
+          onclick="Worker.handleClockIn()">🕒 เข้ากะ (Clock In)</button>
+        <button class="btn-action" style="background:var(--danger); color:white; padding:10px 20px;"
+          onclick="Worker.handleClockOut()">⏹ ออกกะ (Clock Out)</button>
+      </div>
+
+      <div class="dark-table-container" style="margin-top:24px;">
+        <div style="padding:14px 18px; font-weight:bold; border-bottom:1px solid var(--border);">
+          รายชื่อพนักงานและสถิติสะสม (Persistent Shift Database - SQLite)</div>
+        <table>
+          <thead>
+            <tr>
+              <th>รหัสพนักงาน</th>
+              <th>ชื่อ-นามสกุล</th>
+              <th>สถานะปัจจุบัน</th>
+              <th>เวลารวมที่ทำงาน</th>
+              <th>ชิ้นที่หยิบรวม</th>
+              <th>ความเร็วสะสม (UPH)</th>
+            </tr>
+          </thead>
+          <tbody id="worker-table-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- หน้า 7: Inbound (รับเข้าสินค้า / เติมสต็อกสินค้าเดิม / ลงทะเบียนสินค้าใหม่) -->
+    <div id="page-inbound" class="page">
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+        <div>
+          <h2>สถานีรับเข้าสินค้า & จัดการสต็อก (Inbound & Stock Management)</h2>
+          <p style="color: var(--text-muted); font-size: 13px; margin-top:4px;">
+            เติมสต็อกสินค้าเดิมที่กำลังจะหมด หรือสแกนบาร์โค้ดลงทะเบียนสินค้าใหม่เข้าสู่คลังแบบเรียลไทม์
+          </p>
+        </div>
+      </div>
+
+      <!-- Sub-tabs: Replenish vs New SKU vs Relocate -->
+      <div class="inbound-nav-tabs">
+        <button id="tab-inbound-replenish" class="inbound-tab-btn active" onclick="Inbound.switchInboundTab('replenish')">
+          🔄 เติมสต็อกสินค้าเดิม (Quick Restock)
+        </button>
+        <button id="tab-inbound-new" class="inbound-tab-btn" onclick="Inbound.switchInboundTab('new-sku')">
+          ➕ ลงทะเบียนสินค้าใหม่ (New SKU Registration)
+        </button>
+        <button id="tab-inbound-relocate" class="inbound-tab-btn" onclick="Inbound.switchInboundTab('relocate')">
+          📍 จัดการย้ายตำแหน่งสินค้า (Relocate SKU)
+        </button>
+      </div>
+
+      <!-- SECTION 1: เติมสต็อกสินค้าที่มีอยู่แล้ว (Quick Restock) -->
+      <div id="sec-inbound-replenish" style="display:block;">
+        <div style="background:var(--bg-surface); border:1px solid var(--border); border-radius:var(--radius-md); padding:24px; max-width:860px;">
+          <!-- 1. ค้นหา / สแกนสินค้า -->
+          <div style="margin-bottom:20px;">
+            <label style="font-size:13px; font-weight:600; color:var(--text-main); display:block; margin-bottom:6px;">
+              🔍 1. สแกนบาร์โค้ด หรือ เลือกรหัสสินค้าที่ต้องการเติมสต็อก
+            </label>
+            <div style="display:flex; gap:10px; margin-bottom:10px;">
+              <input type="text" id="restock-barcode-input" placeholder="ยิงบาร์โค้ด / EAN / SKU เพื่อค้นหาสินค้าทันที..."
+                onkeydown="if(event.key==='Enter') Inbound.handleRestockBarcodeScan(this.value)"
+                style="flex:1; background:#000; border:1px solid var(--accent-cyan); color:var(--accent-cyan); padding:10px 14px; border-radius:6px; font-family:monospace; font-size:14px;">
+              <button class="btn-action" style="background:var(--accent-cyan); color:#000; font-weight:bold; padding:10px 16px;"
+                onclick="Inbound.handleRestockBarcodeScan(document.getElementById('restock-barcode-input').value)">
+                ⚡ ค้นหา
+              </button>
+              <button class="btn-action" style="background:#1e293b; color:var(--accent-cyan); border:1px solid var(--accent-cyan); padding:10px 16px;"
+                onclick="App.openCamera(val => { document.getElementById('restock-barcode-input').value = val; Inbound.handleRestockBarcodeScan(val); })">
+                📷 กล้องสแกน
+              </button>
+            </div>
+            
+            <select id="restock-sku-select" onchange="Inbound.onSelectReplenishProduct(this.value)"
+              style="width:100%; background:#000; border:1px solid var(--border); color:white; padding:10px 14px; border-radius:6px; font-size:14px;">
+              <option value="">-- ค้นหา/เลือกสินค้าที่ต้องการเติมสต็อก --</option>
+            </select>
+          </div>
+
+          <!-- Product Preview Card -->
+          <div id="restock-product-preview" style="display:none; background:rgba(0,0,0,0.4); border:1px solid var(--border); border-radius:8px; padding:16px; margin-bottom:20px; gap:16px; align-items:center;">
+            <!-- Populated dynamically via Inbound.onSelectReplenishProduct -->
+          </div>
+
+          <!-- 2. เลือกจุดหมายปลายทางของสต็อก -->
+          <div style="margin-bottom:20px;">
+            <label style="font-size:13px; font-weight:600; color:var(--text-main); display:block; margin-bottom:8px;">
+              🎯 2. ปลายทางการนำเข้าสต็อก (Stock Destination)
+            </label>
+            <div style="display:flex; gap:16px; flex-wrap:wrap;">
+              <label style="display:flex; align-items:center; gap:8px; background:#000; border:1px solid var(--border); padding:10px 16px; border-radius:6px; cursor:pointer;">
+                <input type="radio" name="restock-target" value="stock" checked style="accent-color:var(--accent-orange);">
+                <span>
+                  <strong style="color:var(--accent-orange);">สต็อกพร้อมหยิบหน้าร้าน (Active Shelf Stock)</strong>
+                  <small style="display:block; color:var(--text-muted); font-size:11px;">เพิ่มจำนวนสินค้าบนเชลฟ์ที่พร้อมให้บอท/พนักงานสแกนหยิบได้ทันที</small>
+                </span>
+              </label>
+              <label style="display:flex; align-items:center; gap:8px; background:#000; border:1px solid var(--border); padding:10px 16px; border-radius:6px; cursor:pointer;">
+                <input type="radio" name="restock-target" value="reserve" style="accent-color:var(--accent-cyan);">
+                <span>
+                  <strong style="color:var(--accent-cyan);">สต็อกสำรองหลังคลัง (Reserve Stock)</strong>
+                  <small style="display:block; color:var(--text-muted); font-size:11px;">เพิ่มสต็อกสำรองบน Pallet Rack รอย้ายมาเติมหน้าร้าน</small>
+                </span>
+              </label>
+            </div>
+          </div>
+
+          <!-- 3. จำนวนที่ต้องการเติม -->
+          <div style="margin-bottom:20px;">
+            <label style="font-size:13px; font-weight:600; color:var(--text-main); display:block; margin-bottom:8px;">
+              📦 3. จำนวนสินค้าที่นำเข้าเพิ่ม (Quantity)
+            </label>
+            <div style="display:flex; gap:10px; align-items:center; margin-bottom:10px;">
+              <button class="btn-action" style="padding:10px 16px; background:#1e293b; color:white; border:1px solid var(--border); font-size:16px;" onclick="Inbound.adjustRestockQty(-10)">-10</button>
+              <button class="btn-action" style="padding:10px 16px; background:#1e293b; color:white; border:1px solid var(--border); font-size:16px;" onclick="Inbound.adjustRestockQty(-1)">-1</button>
+              <input type="number" id="restock-qty-input" value="10" min="1"
+                style="width:130px; background:#000; border:2px solid var(--accent-orange); color:var(--accent-orange); padding:10px; border-radius:6px; font-size:20px; font-weight:bold; text-align:center;">
+              <button class="btn-action" style="padding:10px 16px; background:#1e293b; color:white; border:1px solid var(--border); font-size:16px;" onclick="Inbound.adjustRestockQty(1)">+1</button>
+              <button class="btn-action" style="padding:10px 16px; background:#1e293b; color:white; border:1px solid var(--border); font-size:16px;" onclick="Inbound.adjustRestockQty(10)">+10</button>
+            </div>
+
+            <!-- Quick presets -->
+            <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+              <span style="font-size:12px; color:var(--text-muted);">ปุ่มลัด:</span>
+              <button class="btn-action" style="padding:4px 10px; font-size:12px; background:#1e293b; color:white;" onclick="Inbound.setRestockQty(5)">+5 ชิ้น</button>
+              <button class="btn-action" style="padding:4px 10px; font-size:12px; background:#1e293b; color:white;" onclick="Inbound.setRestockQty(10)">+10 ชิ้น</button>
+              <button class="btn-action" style="padding:4px 10px; font-size:12px; background:#1e293b; color:white;" onclick="Inbound.setRestockQty(25)">+25 ชิ้น</button>
+              <button class="btn-action" style="padding:4px 10px; font-size:12px; background:#1e293b; color:white;" onclick="Inbound.setRestockQty(50)">+50 ชิ้น</button>
+              <button class="btn-action" style="padding:4px 10px; font-size:12px; background:#1e293b; color:white;" onclick="Inbound.setRestockQty(100)">+100 ชิ้น (ลังใหญ่)</button>
+            </div>
+          </div>
+
+          <!-- 4. หมายเหตุ / ล็อตผลิต -->
+          <div style="margin-bottom:24px;">
+            <label style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:4px;">หมายเหตุ / รหัส PO / เลขล็อต (Optional)</label>
+            <input type="text" id="restock-notes" placeholder="เช่น PO-2026-0928, ล็อตนำเข้า Supplier A"
+              style="width:100%; background:#000; border:1px solid var(--border); color:white; padding:10px 12px; border-radius:6px; font-size:13px;">
+          </div>
+
+          <!-- Submit Restock -->
+          <button class="btn-action" style="width:100%; background:var(--success); color:white; padding:14px; font-size:16px; font-weight:bold; border-radius:6px;"
+            onclick="Inbound.handleReplenishSubmit()">
+            📥 ยืนยันการเติมสต็อกสินค้า (Confirm Restock)
+          </button>
+        </div>
+      </div>
+
+      <!-- SECTION 2: ลงทะเบียนสินค้าใหม่ (New SKU Registration) -->
+      <div id="sec-inbound-new" style="display:none;">
+        <div style="background:var(--bg-surface); border:1px solid var(--border); border-radius:var(--radius-md); padding:24px; max-width: 800px;">
+          <div style="display:flex; gap:16px; margin-bottom:16px;">
+            <div style="flex:1;">
+              <label style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:4px;">รหัสบาร์โค้ดที่สแกน (Barcode / EAN / UPC)*</label>
+              <div style="display:flex; gap:8px;">
+                <input type="text" id="inbound-barcode" placeholder="ยิงสแกนเนอร์ที่นี่..."
+                  style="flex:1; background:#000; border:1px solid var(--accent-cyan); color:var(--accent-cyan); padding:10px; border-radius:4px; font-family:monospace; font-size:14px;">
+                <button class="btn-action" style="background:var(--accent-cyan); color:#000; font-weight:bold;"
+                  onclick="App.openCamera(val => { document.getElementById('inbound-barcode').value = val; Inbound.checkInboundBarcode(val); })">📷 เปิดกล้องสแกน</button>
+              </div>
+            </div>
+          </div>
+
+          <div style="display:flex; gap:16px; margin-bottom:16px; flex-wrap:wrap;">
+            <div style="flex:2; min-width:250px;">
+              <label style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:4px;">ชื่อสินค้า (Product Name)*</label>
+              <input type="text" id="inbound-name" placeholder="ระบุชื่อสินค้า..."
+                style="width:100%; background:#000; border:1px solid var(--border); color:white; padding:10px; border-radius:4px; font-size:14px;">
+            </div>
+            <div style="flex:1; min-width:150px;">
+              <label style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:4px;">จำนวนรับเข้าเริ่มต้น (ชิ้น)*</label>
+              <input type="number" id="inbound-qty" value="10" min="1"
+                style="width:100%; background:#000; border:1px solid var(--border); color:var(--accent-orange); padding:10px; border-radius:4px; font-size:16px; font-weight:bold; text-align:center;">
+            </div>
+          </div>
+
+          <div style="display:flex; gap:16px; margin-bottom:24px;">
+            <div style="flex:1;">
+              <label style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:4px;">หมวดหมู่ (Category)*</label>
+              <select id="inbound-cat"
+                style="width:100%; background:#000; border:1px solid var(--border); color:white; padding:10px; border-radius:4px; font-size:14px;">
+                <option value="อาหารและเครื่องดื่ม">🍔 อาหารและเครื่องดื่ม</option>
+                <option value="สุขภาพและความงาม">💊 สุขภาพและความงาม</option>
+                <option value="ของใช้ในบ้าน">🏠 ของใช้ในบ้าน</option>
+                <option value="เครื่องใช้ไฟฟ้า">🔌 เครื่องใช้ไฟฟ้า</option>
+                <option value="แคมป์ปิ้งและเครื่องมือ">🛠️ แคมป์ปิ้งและเครื่องมือ</option>
+                <option value="อุปกรณ์ไอที">💻 อุปกรณ์ไอที</option>
+              </select>
+            </div>
+            <div style="flex:1;">
+              <label style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:4px;">ราคา (บาท)*</label>
+              <input type="number" id="inbound-price" value="99" min="1"
+                style="width:100%; background:#000; border:1px solid var(--border); color:white; padding:10px; border-radius:4px; font-size:14px;">
+            </div>
+          </div>
+
+          <div style="display:flex; gap:16px; margin-bottom:24px;">
+            <div style="flex:1;">
+              <label style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:4px;">กำหนดโซนจัดเก็บ (Zone)*</label>
+              <select id="inbound-zone"
+                style="width:100%; background:#000; border:1px solid var(--border); color:white; padding:10px; border-radius:4px; font-size:14px;">
+                <option value="A">Zone A (ออกเร็ว)</option>
+                <option value="B">Zone B (ปานกลาง)</option>
+                <option value="C">Zone C (ออกช้า)</option>
+              </select>
+            </div>
+            <div style="flex:1;">
+              <label style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:4px;">พิกัดเชลฟ์ (Location)*</label>
+              <input type="text" id="inbound-loc" placeholder="เช่น A-05-01"
+                style="width:100%; background:#000; border:1px solid var(--border); color:white; padding:10px; border-radius:4px; font-size:14px; text-transform:uppercase;">
+            </div>
+          </div>
+
+          <div style="display:flex; gap:16px; margin-bottom:16px;">
+            <div style="flex:1;">
+              <label style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:4px;">ลิงก์รูปภาพสินค้า (Image URL - ใส่หรือไม่ใส่ก็ได้)</label>
+              <input type="text" id="inbound-image"
+                placeholder="https://images.unsplash.com/... (หากไม่ระบุ ระบบจะใช้ภาพมาตรฐาน)"
+                style="width:100%; background:#000; border:1px solid var(--border); color:white; padding:10px; border-radius:4px; font-size:14px;">
+            </div>
+          </div>
+
+          <div style="display:flex; gap:16px; margin-bottom:24px;">
+            <div style="flex:1;">
+              <label style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:4px;">คำอธิบายสินค้าเชิงลึก (Description)</label>
+              <textarea id="inbound-desc" rows="2" placeholder="ระบุสรรพคุณ จุดเด่น หรือรายละเอียดของสินค้า..."
+                style="width:100%; background:#000; border:1px solid var(--border); color:white; padding:10px; border-radius:4px; font-size:14px; resize:vertical;"></textarea>
+            </div>
+          </div>
+
+          <button class="btn-action"
+            style="width:100%; background:var(--success); color:white; padding:12px; font-size:15px;"
+            onclick="Inbound.handleInboundSubmit()">📥 บันทึกรับเข้าสินค้าใหม่ (Register New SKU)</button>
+        </div>
+      </div>
+
+      <!-- SECTION 3: จัดการย้ายตำแหน่งสินค้า (Relocate SKU Management) -->
+      <div id="sec-inbound-relocate" style="display:none;">
+        <!-- Top Stats / Guidance Banner -->
+        <div style="background:linear-gradient(135deg, rgba(249, 115, 22, 0.1) 0%, rgba(6, 182, 212, 0.08) 100%); border:1px solid rgba(249, 115, 22, 0.3); border-radius:var(--radius-md); padding:16px 20px; margin-bottom:20px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+          <div>
+            <div style="display:flex; align-items:center; gap:8px;">
+              <span style="font-size:20px;">📍</span>
+              <strong style="font-size:15px; color:var(--accent-orange);">ศูนย์จัดการย้ายตำแหน่งสินค้าอัจฉริยะ (Dynamic SKU Relocation Hub)</strong>
+            </div>
+            <p style="color:var(--text-muted); font-size:12px; margin-top:4px;">
+              จัดผังคลังสินค้าใหม่ ย้ายสินค้าขายดี (Fast-mover) มาอยู่ใกล้โต๊ะแพ็ก หรือสลับตำแหน่งระหว่างเชลฟ์ ระบบจะอัปเดตใบหยิบ (Picking Waves) และแผนที่คลังแบบเรียลไทม์
+            </p>
+          </div>
+          <div style="display:flex; gap:10px; flex-wrap:wrap;">
+            <div style="background:#000; border:1px solid var(--border); padding:6px 14px; border-radius:6px; font-size:12px; text-align:center;">
+              <span style="color:var(--text-muted); font-size:10px; display:block;">โซนจัดเก็บ</span>
+              <strong style="color:var(--accent-orange);">Zone A, B, C</strong>
+            </div>
+            <div style="background:#000; border:1px solid var(--border); padding:6px 14px; border-radius:6px; font-size:12px; text-align:center;">
+              <span style="color:var(--text-muted); font-size:10px; display:block;">ความจุช่องเชลฟ์</span>
+              <strong style="color:var(--accent-cyan);">18 Racks (108 ล็อก)</strong>
+            </div>
+            <div style="background:#000; border:1px solid var(--border); padding:6px 14px; border-radius:6px; font-size:12px; text-align:center;">
+              <span style="color:var(--text-muted); font-size:10px; display:block;">ระบบซิงค์</span>
+              <strong style="color:var(--success);">Auto Waves Sync</strong>
+            </div>
+          </div>
+        </div>
+
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(420px, 1fr)); gap:24px; margin-bottom:24px;">
+          <!-- ฝั่งซ้าย: ฟอร์มจัดการย้ายตำแหน่ง -->
+          <div style="background:var(--bg-surface); border:1px solid var(--border); border-radius:var(--radius-md); padding:24px;">
+            <!-- 1. ค้นหา / เลือกสินค้าที่จะย้าย -->
+            <div style="margin-bottom:20px;">
+              <label style="font-size:13px; font-weight:700; color:var(--text-main); display:block; margin-bottom:6px;">
+                🔍 1. สแกนบาร์โค้ด หรือ เลือกรหัสสินค้าที่ต้องการย้ายตำแหน่ง
+              </label>
+              <div style="display:flex; gap:10px; margin-bottom:10px;">
+                <input type="text" id="relocate-barcode-input" placeholder="ยิงบาร์โค้ด / EAN / SKU เพื่อเลือกสินค้า..."
+                  onkeydown="if(event.key==='Enter') Inbound.handleRelocateBarcodeScan(this.value)"
+                  style="flex:1; background:#000; border:1px solid var(--accent-orange); color:var(--accent-orange); padding:10px 14px; border-radius:6px; font-family:monospace; font-size:14px;">
+                <button class="btn-action" style="background:var(--accent-orange); color:white; font-weight:bold; padding:10px 16px;"
+                  onclick="Inbound.handleRelocateBarcodeScan(document.getElementById('relocate-barcode-input').value)">
+                  ⚡ ค้นหา
+                </button>
+                <button class="btn-action" style="background:#1e293b; color:var(--accent-orange); border:1px solid var(--accent-orange); padding:10px 16px;"
+                  onclick="App.openCamera(val => { document.getElementById('relocate-barcode-input').value = val; Inbound.handleRelocateBarcodeScan(val); })">
+                  📷 กล้อง
+                </button>
+              </div>
+
+              <select id="relocate-sku-select" onchange="Inbound.onSelectRelocateProduct(this.value)"
+                style="width:100%; background:#000; border:1px solid var(--border); color:white; padding:10px 14px; border-radius:6px; font-size:14px;">
+                <option value="">-- ค้นหา/เลือกสินค้าที่ต้องการย้ายตำแหน่ง --</option>
+              </select>
+            </div>
+
+            <!-- Preview Card สินค้าที่เลือก -->
+            <div id="relocate-product-preview" style="display:none; background:rgba(0,0,0,0.5); border:1px solid var(--border); border-radius:8px; padding:16px; margin-bottom:20px; gap:16px; align-items:center;">
+              <!-- Populated via onSelectRelocateProduct -->
+            </div>
+
+            <!-- 2. กำหนดพิกัดเป้าหมายใหม่ (Target Location) -->
+            <div style="margin-bottom:20px; background:rgba(0,0,0,0.25); border:1px solid var(--border); border-radius:8px; padding:16px;">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+                <label style="font-size:13px; font-weight:700; color:var(--text-main);">
+                  🎯 2. พิกัดตำแหน่งใหม่ที่ต้องการย้ายไป (Target Location)
+                </label>
+                <span style="font-size:11px; color:var(--text-muted);">คลิกเลือกปุ่มลัดหรือพิมพ์พิกัด</span>
+              </div>
+
+              <!-- Quick Selector: Zone -->
+              <div style="margin-bottom:12px;">
+                <span style="font-size:11px; color:var(--text-muted); display:block; margin-bottom:6px;">เลือกโซน (Zone):</span>
+                <div style="display:flex; gap:8px;">
+                  <button type="button" class="btn-action btn-zone-target active" data-zone="A" onclick="Inbound.setTargetZone('A')"
+                    style="flex:1; padding:8px; font-size:12px; font-weight:bold;">Zone A (ออกเร็ว)</button>
+                  <button type="button" class="btn-action btn-zone-target" data-zone="B" onclick="Inbound.setTargetZone('B')"
+                    style="flex:1; padding:8px; font-size:12px; font-weight:bold;">Zone B (ปานกลาง)</button>
+                  <button type="button" class="btn-action btn-zone-target" data-zone="C" onclick="Inbound.setTargetZone('C')"
+                    style="flex:1; padding:8px; font-size:12px; font-weight:bold;">Zone C (ชิ้นใหญ่/Bulky)</button>
+                </div>
+              </div>
+
+              <!-- Quick Selector: Rack (01 - 06) -->
+              <div style="margin-bottom:12px;">
+                <span style="font-size:11px; color:var(--text-muted); display:block; margin-bottom:6px;">เลือกแถวเชลฟ์ (Rack/Aisle 01-06):</span>
+                <div style="display:grid; grid-template-columns:repeat(6, 1fr); gap:6px;">
+                  <button type="button" class="btn-action btn-rack-target active" data-rack="01" onclick="Inbound.setTargetRack('01')" style="padding:6px; font-size:11px;">R-01</button>
+                  <button type="button" class="btn-action btn-rack-target" data-rack="02" onclick="Inbound.setTargetRack('02')" style="padding:6px; font-size:11px;">R-02</button>
+                  <button type="button" class="btn-action btn-rack-target" data-rack="03" onclick="Inbound.setTargetRack('03')" style="padding:6px; font-size:11px;">R-03</button>
+                  <button type="button" class="btn-action btn-rack-target" data-rack="04" onclick="Inbound.setTargetRack('04')" style="padding:6px; font-size:11px;">R-04</button>
+                  <button type="button" class="btn-action btn-rack-target" data-rack="05" onclick="Inbound.setTargetRack('05')" style="padding:6px; font-size:11px;">R-05</button>
+                  <button type="button" class="btn-action btn-rack-target" data-rack="06" onclick="Inbound.setTargetRack('06')" style="padding:6px; font-size:11px;">R-06</button>
+                </div>
+              </div>
+
+              <!-- Quick Selector: Shelf Level (01 - 03) -->
+              <div style="margin-bottom:14px;">
+                <span style="font-size:11px; color:var(--text-muted); display:block; margin-bottom:6px;">เลือกชั้นวาง/ล็อก (Shelf Slot 01-03):</span>
+                <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:8px;">
+                  <button type="button" class="btn-action btn-slot-target active" data-slot="01" onclick="Inbound.setTargetSlot('01')" style="padding:6px; font-size:11px;">ชั้นล่าง (Slot 01)</button>
+                  <button type="button" class="btn-action btn-slot-target" data-slot="02" onclick="Inbound.setTargetSlot('02')" style="padding:6px; font-size:11px;">ชั้นกลาง (Slot 02)</button>
+                  <button type="button" class="btn-action btn-slot-target" data-slot="03" onclick="Inbound.setTargetSlot('03')" style="padding:6px; font-size:11px;">ชั้นบน (Slot 03)</button>
+                </div>
+              </div>
+
+              <!-- Direct Input & Preview of Final Location Code -->
+              <div>
+                <span style="font-size:11px; color:var(--text-muted); display:block; margin-bottom:4px;">รหัสพิกัดสุดท้าย (พิมพ์เองหรือแก้ได้ทันที):</span>
+                <input type="text" id="relocate-target-loc" value="A-01-01" placeholder="เช่น A-01-01"
+                  oninput="Inbound.onTargetLocInputChange(this.value)"
+                  style="width:100%; background:#000; border:2px solid var(--accent-cyan); color:var(--accent-cyan); padding:10px 14px; border-radius:6px; font-family:monospace; font-size:18px; font-weight:800; text-align:center; letter-spacing:1px; text-transform:uppercase;">
+              </div>
+
+              <!-- Occupancy Status Indicator -->
+              <div id="relocate-slot-status" style="margin-top:10px;">
+                <!-- Populated dynamically via checkTargetSlotOccupancy() -->
+              </div>
+            </div>
+
+            <!-- 3. เหตุผลในการย้าย & ผู้ดำเนินการ -->
+            <div style="margin-bottom:20px;">
+              <label style="font-size:13px; font-weight:700; color:var(--text-main); display:block; margin-bottom:6px;">
+                📝 3. เหตุผลในการย้ายตำแหน่ง (Reason / Notes)
+              </label>
+              
+              <!-- Quick preset reason chips -->
+              <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px;">
+                <button type="button" class="btn-action" style="padding:4px 8px; font-size:11px; background:#1e293b; color:white;" onclick="Inbound.setRelocateReason('ย้ายเข้าใกล้โต๊ะแพ็ก (Fast-mover ABC)')">🚀 Fast-mover ใกล้โต๊ะแพ็ก</button>
+                <button type="button" class="btn-action" style="padding:4px 8px; font-size:11px; background:#1e293b; color:white;" onclick="Inbound.setRelocateReason('จัดกลุ่มหมวดหมู่สินค้าใหม่ (Category Grouping)')">📦 รวมหมวดหมู่เดียวกัน</button>
+                <button type="button" class="btn-action" style="padding:4px 8px; font-size:11px; background:#1e293b; color:white;" onclick="Inbound.setRelocateReason('เชลฟ์เดิมชำรุดรอซ่อมบำรุง (Maintenance)')">🛠️ ชั้นวางชำรุด</button>
+                <button type="button" class="btn-action" style="padding:4px 8px; font-size:11px; background:#1e293b; color:white;" onclick="Inbound.setRelocateReason('ปรับสมดุลพื้นที่คลัง (Warehouse Rebalancing)')">⚖️ ปรับสมดุลคลัง</button>
+              </div>
+
+              <input type="text" id="relocate-reason-input" placeholder="ระบุเหตุผลในการย้าย..."
+                value="ย้ายปรับปรุงพื้นที่จัดเก็บ (Warehouse Optimization)"
+                style="width:100%; background:#000; border:1px solid var(--border); color:white; padding:10px 12px; border-radius:6px; font-size:13px; margin-bottom:10px;">
+
+              <div style="display:flex; gap:10px; align-items:center;">
+                <label style="font-size:12px; color:var(--text-muted); white-space:nowrap;">ผู้บันทึกการย้าย:</label>
+                <input type="text" id="relocate-moved-by-input" placeholder="ชื่อเจ้าหน้าที่..."
+                  style="flex:1; background:#000; border:1px solid var(--border); color:var(--accent-cyan); padding:8px 12px; border-radius:4px; font-size:13px;">
+              </div>
+            </div>
+
+            <!-- Submit Relocation Button -->
+            <button class="btn-action" style="width:100%; background:linear-gradient(135deg, #f97316 0%, #ea580c 100%); color:white; padding:15px; font-size:16px; font-weight:800; border-radius:6px; box-shadow:0 4px 16px rgba(249, 115, 22, 0.4); display:flex; justify-content:center; align-items:center; gap:8px;"
+              onclick="Inbound.handleRelocateSubmit()">
+              <span>🚀 ยืนยันการย้ายตำแหน่งสินค้า (Confirm Relocation)</span>
+            </button>
+          </div>
+
+          <!-- ฝั่งขวา: แผนที่เชลฟ์ 2D แบบ Interactive (Interactive Slot Map) -->
+          <div style="background:var(--bg-surface); border:1px solid var(--border); border-radius:var(--radius-md); padding:24px; display:flex; flex-direction:column;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; flex-wrap:wrap; gap:8px;">
+              <div>
+                <strong style="font-size:15px; color:var(--text-main); display:block;">🗺️ แผนผังเชลฟ์คลังสินค้า (Visual Slot Grid)</strong>
+                <span style="font-size:12px; color:var(--text-muted);">คลิกเลือกช่องใดก็ได้บนแผนที่เพื่อระบุเป็นพิกัดเป้าหมายทันที</span>
+              </div>
+              <div style="display:flex; gap:10px; font-size:11px;">
+                <span style="display:inline-flex; align-items:center; gap:4px;"><span style="display:inline-block; width:10px; height:10px; border:2px solid var(--accent-orange); background:rgba(249, 115, 22, 0.4); border-radius:2px;"></span> พิกัดเดิม</span>
+                <span style="display:inline-flex; align-items:center; gap:4px;"><span style="display:inline-block; width:10px; height:10px; border:2px solid var(--accent-cyan); background:rgba(6, 182, 212, 0.4); border-radius:2px;"></span> เป้าหมาย</span>
+                <span style="display:inline-flex; align-items:center; gap:4px;"><span style="display:inline-block; width:10px; height:10px; background:#1e293b; border:1px solid #4b5563; border-radius:2px;"></span> มีสินค้า</span>
+                <span style="display:inline-flex; align-items:center; gap:4px;"><span style="display:inline-block; width:10px; height:10px; border:1px dashed #475569; border-radius:2px;"></span> ว่าง</span>
+              </div>
+            </div>
+
+            <!-- Container for Interactive Slot Map -->
+            <div id="relocate-interactive-map" style="flex:1; overflow-y:auto; max-height:550px; padding-right:4px;">
+              <!-- Rendered via Inbound.renderInteractiveSlotMap() -->
+            </div>
+          </div>
+        </div>
+
+        <!-- ประวัติการย้ายตำแหน่งสินค้าล่าสุด (Location Move Audit History) -->
+        <div class="dark-table-container">
+          <div style="display:flex; justify-content:space-between; align-items:center; padding:16px 20px; border-bottom:1px solid var(--border);">
+            <div>
+              <strong style="font-size:15px; color:var(--text-main);">📜 ประวัติการย้ายตำแหน่งสินค้าล่าสุด (Location Relocation Audit Trail)</strong>
+              <div style="font-size:12px; color:var(--text-muted); margin-top:2px;">บันทึกการเปลี่ยนพิกัดสินค้าทุกรายการ ยืนยันความโปร่งใสและตรวจสอบย้อนหลังได้</div>
+            </div>
+            <button class="btn-action" style="padding:6px 14px; font-size:12px; background:#1e293b; color:var(--accent-cyan); border:1px solid var(--border);" onclick="Inbound.loadRelocateHistory()">
+              🔄 รีเฟรชประวัติ
+            </button>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th style="width:110px;">วัน-เวลา</th>
+                <th>รหัส & ชื่อสินค้า</th>
+                <th style="width:120px;">พิกัดเดิม</th>
+                <th style="width:160px;">พิกัดใหม่</th>
+                <th>เหตุผลการย้าย (Reason)</th>
+                <th style="width:130px;">ผู้ดำเนินการ</th>
+              </tr>
+            </thead>
+            <tbody id="relocate-history-tbody">
+              <tr>
+                <td colspan="6" style="text-align:center; color:var(--text-muted); padding:24px;">กำลังโหลดประวัติ...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- หน้า 8: แผนการสั่งซื้อ (Procurement & Backorder Management) -->
+    <div id="page-procurement" class="page">
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:16px;">
+        <div>
+          <div style="display:flex; align-items:center; gap:10px;">
+            <h2 style="font-size:24px; font-weight:800; color:var(--text-main);">📋 ระบบจัดทำแผนการสั่งซื้อ & จัดการสินค้าขาด (Procurement System)</h2>
+            <span style="background:rgba(249, 115, 22, 0.2); color:var(--accent-orange); border:1px solid var(--accent-orange); font-size:11px; font-weight:bold; padding:2px 8px; border-radius:4px;">PO & BACKORDER</span>
+          </div>
+          <p style="color: var(--text-muted); font-size: 13px; margin-top:4px;">
+            วิเคราะห์ความต้องการสินค้าเมื่อสต็อกเหลือน้อยหรือสั่งเกินเพื่อจอง Order ติดตามเวลาจัดส่งประมาณการ (ETA) และปลดล็อกออเดอร์อัตโนมัติเมื่อสินค้าเข้าคลัง
+          </p>
+        </div>
+        <div style="display:flex; gap:10px; flex-wrap:wrap;">
+          <button class="btn-action" style="background:var(--accent-orange); color:white; font-weight:bold; padding:10px 18px;" onclick="Procurement.autoGeneratePlanFromShortages()">
+            ⚡ แผนสั่งซื้ออัจฉริยะ (Smart Reorder Plan)
+          </button>
+          <button class="btn-action" style="background:var(--accent-cyan); color:#000; font-weight:bold; padding:10px 18px;" onclick="Procurement.switchSubTab('create-plan')">
+            ➕ จัดทำแผนสั่งซื้อใหม่
+          </button>
+          <button class="btn-action" style="background:#1e293b; color:var(--text-main); border:1px solid var(--border); padding:10px 16px;" onclick="Procurement.reloadAll()">
+            🔄 รีเฟรช
+          </button>
+        </div>
+      </div>
+
+      <!-- KPI Summary Cards -->
+      <div class="proc-kpi-grid">
+        <div class="proc-kpi-card" style="cursor:pointer;" onclick="Procurement.switchSubTab('backorders')">
+          <div class="proc-kpi-icon" style="background:rgba(239, 68, 68, 0.15); color:#f87171;">⏳</div>
+          <div>
+            <div class="proc-kpi-label">ออเดอร์ที่ติดจอง (Backorders)</div>
+            <div class="proc-kpi-val" id="kpi-procurement-backorders" style="color:#f87171;">0 ออเดอร์</div>
+          </div>
+        </div>
+
+        <div class="proc-kpi-card" style="cursor:pointer;" onclick="Procurement.switchSubTab('create-plan')">
+          <div class="proc-kpi-icon" style="background:rgba(245, 158, 11, 0.15); color:#fbbf24;">⚠️</div>
+          <div>
+            <div class="proc-kpi-label">สินค้าสต็อกต่ำ (Low Stock)</div>
+            <div class="proc-kpi-val" id="kpi-procurement-lowstock" style="color:#fbbf24;">0 รายการ</div>
+          </div>
+        </div>
+
+        <div class="proc-kpi-card" style="cursor:pointer;" onclick="Procurement.switchSubTab('active-pos')">
+          <div class="proc-kpi-icon" style="background:rgba(6, 182, 212, 0.15); color:var(--accent-cyan);">🚚</div>
+          <div>
+            <div class="proc-kpi-label">กำลังจัดส่ง (In-Transit POs)</div>
+            <div class="proc-kpi-val" id="kpi-procurement-intransit" style="color:var(--accent-cyan);">0 แผน</div>
+          </div>
+        </div>
+
+        <div class="proc-kpi-card" style="cursor:pointer;" onclick="Procurement.switchSubTab('history')">
+          <div class="proc-kpi-icon" style="background:rgba(16, 185, 129, 0.15); color:var(--success);">✅</div>
+          <div>
+            <div class="proc-kpi-label">รับเข้าคลังแล้ว (Received)</div>
+            <div class="proc-kpi-val" id="kpi-procurement-received" style="color:var(--success);">0 แผน</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Sub Navigation Tabs -->
+      <div class="proc-subtabs">
+        <button class="proc-subtab-btn active" data-tab="active-pos" onclick="Procurement.switchSubTab('active-pos')">
+          🚚 1. ติดตามการจัดส่ง & ยืนยันรับของ (Active POs & ETA)
+        </button>
+        <button class="proc-subtab-btn" data-tab="create-plan" onclick="Procurement.switchSubTab('create-plan')">
+          ➕ 2. จัดทำแผนการสั่งซื้อ (Create Purchase Plan)
+        </button>
+        <button class="proc-subtab-btn" data-tab="backorders" onclick="Procurement.switchSubTab('backorders')">
+          ⏳ 3. คำสั่งซื้อที่ติดจอง (Backordered Orders Queue)
+        </button>
+        <button class="proc-subtab-btn" data-tab="history" onclick="Procurement.switchSubTab('history')">
+          📜 4. ประวัติการรับเข้า (Procurement History)
+        </button>
+      </div>
+
+      <!-- Content Tab 1: Active POs & ETA Tracking -->
+      <div id="proc-content-active-pos" class="proc-tab-content" style="display:block;">
+        <div id="proc-active-pos-list">
+          <!-- Populated dynamically via Procurement.renderActivePOs -->
+        </div>
+      </div>
+
+      <!-- Content Tab 2: Create Purchase Plan -->
+      <div id="proc-content-create-plan" class="proc-tab-content" style="display:none;">
+        <div style="display:grid; grid-template-columns: 340px 1fr; gap:20px; align-items:flex-start;">
+          <!-- Left: Suggestions Sidebar -->
+          <div style="background:var(--bg-surface); border:1px solid var(--border); border-radius:var(--radius-md); padding:16px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; padding-bottom:8px; border-bottom:1px solid var(--border);">
+              <strong style="font-size:14px; color:var(--text-main);">💡 สินค้าที่แนะนำให้สั่งซื้อ</strong>
+              <button class="btn-action" style="font-size:11px; padding:4px 8px; background:var(--accent-orange); color:white;" onclick="Procurement.autoGeneratePlanFromShortages()">
+                + เลือกทั้งหมด
+              </button>
+            </div>
+            <p style="font-size:12px; color:var(--text-muted); margin-bottom:12px;">
+              สินค้าที่มียอดสั่งจองค้างส่ง หรือสต็อกคงเหลือต่ำกว่าเกณฑ์ความปลอดภัย (<= 10 ชิ้น)
+            </p>
+            <div id="proc-suggestions-list" style="max-height:560px; overflow-y:auto; padding-right:4px;">
+              <!-- Populated dynamically via Procurement.renderSuggestionsSidebar -->
+            </div>
+          </div>
+
+          <!-- Right: Plan Builder Form -->
+          <div style="background:var(--bg-surface); border:1px solid var(--border); border-radius:var(--radius-md); padding:24px;">
+            <h3 style="font-size:17px; color:var(--text-main); margin-bottom:16px; display:flex; align-items:center; gap:8px;">
+              <span>📝 รายละเอียดแผนการสั่งซื้อ (Purchase Plan Details)</span>
+            </h3>
+
+            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:16px; margin-bottom:16px;">
+              <div>
+                <label style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:6px;">ชื่อแผนการสั่งซื้อ (Title)*</label>
+                <input type="text" id="proc-plan-title" placeholder="เช่น แผนสั่งซื้อเติมสต็อกประจำสัปดาห์ / คืนของติดจอง"
+                  style="width:100%; background:#000; border:1px solid var(--border); color:white; padding:10px 12px; border-radius:6px; font-size:14px;">
+              </div>
+              <div>
+                <label style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:6px;">ผู้จัดจำหน่าย (Supplier)*</label>
+                <input type="text" id="proc-plan-supplier" value="CP All Logistics & Wholesale Hub" placeholder="ระบุชื่อบริษัทคู่ค้า / ซัพพลายเออร์"
+                  style="width:100%; background:#000; border:1px solid var(--border); color:white; padding:10px 12px; border-radius:6px; font-size:14px;">
+              </div>
+              <div>
+                <label style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:6px;">เวลาจัดส่งประมาณการ (Estimated Lead Time / ETA)*</label>
+                <select id="proc-plan-eta"
+                  style="width:100%; background:#000; border:1px solid var(--border); color:var(--accent-orange); font-weight:bold; padding:10px 12px; border-radius:6px; font-size:14px;">
+                  <option value="2">⚡ 2 นาที (สำหรับการทดสอบแบบเร่งด่วน)</option>
+                  <option value="3" selected>⚡ 3 นาที (แนะนำสำหรับการสาธิต Live)</option>
+                  <option value="5">🚚 5 นาที (จัดส่งด่วน)</option>
+                  <option value="15">📦 15 นาที</option>
+                  <option value="60">🏢 1 ชั่วโมง</option>
+                  <option value="1440">📅 1 วัน (24 ชั่วโมง)</option>
+                </select>
+              </div>
+            </div>
+
+            <div style="margin-bottom:20px;">
+              <label style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:6px;">หมายเหตุ / บันทึกเพิ่มเติม</label>
+              <input type="text" id="proc-plan-notes" placeholder="เช่น คำสั่งซื้อด่วนเนื่องจากยอดสั่งจองสูง, ตรวจรับสินค้าที่ประตู D-02"
+                style="width:100%; background:#000; border:1px solid var(--border); color:white; padding:10px 12px; border-radius:6px; font-size:13px;">
+            </div>
+
+            <!-- Selected Items Table -->
+            <div style="margin-bottom:20px;">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                <label style="font-size:13px; font-weight:700; color:var(--text-main);">
+                  📦 รายการสินค้าในแผนสั่งซื้อนี้
+                </label>
+                <button class="btn-action" style="font-size:11px; padding:4px 10px; background:#1e293b; color:var(--accent-cyan); border:1px solid var(--accent-cyan);"
+                  onclick="Procurement.autoGeneratePlanFromShortages()">
+                  ⚡ ดึงสินค้าที่ต้องเติมทั้งหมด
+                </button>
+              </div>
+
+              <div class="dark-table-container">
+                <table>
+                  <thead>
+                    <tr>
+                      <th style="width:40px; text-align:center;">ลำดับ</th>
+                      <th>สินค้า</th>
+                      <th>สถานะปัจจุบัน</th>
+                      <th style="width:150px; text-align:center;">จำนวนสั่งซื้อ</th>
+                      <th style="text-align:right;">ราคาต่อหน่วย</th>
+                      <th style="text-align:right;">ราคารวม</th>
+                      <th style="width:60px; text-align:center;">ลบ</th>
+                    </tr>
+                  </thead>
+                  <tbody id="proc-new-items-body">
+                    <!-- Populated dynamically via Procurement.renderNewPlanItemsTable -->
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <!-- Summary & Actions -->
+            <div style="background:#000; border:1px solid var(--border); border-radius:8px; padding:16px 20px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:16px;">
+              <div>
+                <span style="font-size:13px; color:var(--text-muted);">จำนวนสินค้ารวม: <strong id="proc-new-total-qty" style="color:var(--accent-orange); font-size:16px;">0 ชิ้น</strong></span>
+                <span style="color:#6b7280; margin:0 12px;">|</span>
+                <span style="font-size:13px; color:var(--text-muted);">งบประมาณรวม: <strong id="proc-new-total-cost" style="color:var(--success); font-size:18px;">฿0.00</strong></span>
+              </div>
+              <div style="display:flex; gap:10px;">
+                <button class="btn-action" style="background:#1e293b; color:white; border:1px solid var(--border); padding:10px 18px;" onclick="Procurement.submitPlan('Draft')">
+                  💾 บันทึกแบบร่าง (Save Draft)
+                </button>
+                <button class="btn-action" style="background:linear-gradient(135deg, #f97316 0%, #ea580c 100%); color:white; font-weight:bold; padding:10px 22px; box-shadow:0 4px 14px rgba(249,115,22,0.4);" onclick="Procurement.submitPlan('Ordered')">
+                  🚀 ยืนยันการสั่งซื้อ (Place Order & Start ETA)
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Content Tab 3: Backordered Orders Queue -->
+      <div id="proc-content-backorders" class="proc-tab-content" style="display:none;">
+        <div id="proc-backorders-container">
+          <!-- Populated dynamically via Procurement.renderBackordersQueue -->
+        </div>
+      </div>
+
+      <!-- Content Tab 4: Procurement History -->
+      <div id="proc-content-history" class="proc-tab-content" style="display:none;">
+        <div id="proc-history-container">
+          <!-- Populated dynamically via Procurement.renderHistoryView -->
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: แก้ไขข้อผิดพลาดของ QC Log (Audit Logs & KPI Sync) -->
+  <div id="modal-edit-qc-log" class="modal-overlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.8); z-index:9999; justify-content:center; align-items:center;">
+    <div style="background:var(--bg-surface); border:1px solid var(--border); border-radius:var(--radius-lg); width:90%; max-width:540px; padding:24px; box-shadow:0 20px 40px rgba(0,0,0,0.6);">
+      <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--border); padding-bottom:12px; margin-bottom:16px;">
+        <h3 style="margin:0; font-size:16px; color:var(--text-main); display:flex; align-items:center; gap:8px;">
+          ✏️ แก้ไขบันทึกการทำงาน & ข้อผิดพลาด (Audit Log)
+        </h3>
+        <button onclick="Analytics.closeEditQCModal()" style="background:none; border:none; color:var(--text-muted); font-size:20px; cursor:pointer;">&times;</button>
+      </div>
+
+      <input type="hidden" id="edit-qc-id">
+
+      <div style="background:rgba(0,0,0,0.3); border:1px solid var(--border); border-radius:6px; padding:10px 14px; margin-bottom:16px; display:flex; justify-content:space-between; font-size:13px;">
+        <div>Order: <strong id="edit-qc-order-id-display" style="color:var(--accent-cyan); font-family:monospace;"></strong></div>
+        <div>เวลาที่ตรวจ: <span id="edit-qc-time-display" style="color:var(--text-muted);"></span></div>
+      </div>
+
+      <div style="margin-bottom:16px;">
+        <label style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:6px;">ผลการตรวจสอบคุณภาพ (QC Status)*</label>
+        <div style="display:flex; gap:20px;">
+          <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
+            <input type="radio" name="edit-qc-status" value="PASS" onchange="Analytics.handleEditQCStatusChange('PASS')">
+            <span style="color:var(--success); font-weight:bold;">🟢 ผ่านเกณฑ์ (PASS)</span>
+          </label>
+          <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
+            <input type="radio" name="edit-qc-status" value="FAIL" onchange="Analytics.handleEditQCStatusChange('FAIL')">
+            <span style="color:var(--danger); font-weight:bold;">🔴 พบข้อผิดพลาด (FAIL)</span>
+          </label>
+        </div>
+      </div>
+
+      <div id="edit-qc-defect-fields" style="display:none; margin-bottom:16px;">
+        <label style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:6px;">ประเภทข้อผิดพลาด (Defect Category)*</label>
+        <select id="edit-qc-defect-type" onchange="Analytics.handleEditQCDefectChange(this.value)"
+          style="width:100%; background:#000; border:1px solid var(--danger); color:white; padding:8px 10px; border-radius:4px; font-size:13px; margin-bottom:8px;">
+          <option value="NONE">-- ไม่มีข้อบกพร่อง (None) --</option>
+          <option value="WRONG_SKU">❌ สินค้าผิดรายการ (Wrong SKU)</option>
+          <option value="WRONG_QTY">🔢 จำนวนไม่ตรง (Short/Over Qty)</option>
+          <option value="DAMAGED_ITEM">💥 สินค้าชำรุด/แตกหัก (Damaged Item)</option>
+          <option value="DEFECTIVE_BARCODE">🏷️ บาร์โค้ดเสียหาย/สแกนไม่ติด (Defective Barcode)</option>
+          <option value="EXPIRED_ITEM">⏳ สินค้าหมดอายุ/ใกล้หมดอายุ (Expired)</option>
+          <option value="PACKAGING_TORN">📦 กล่อง/บรรจุภัณฑ์ฉีกขาด (Packaging Torn)</option>
+          <option value="WRONG_SLOT">📍 หยิบผิดตำแหน่ง/เชลฟ์ (Wrong Slot)</option>
+          <option value="CUSTOM">📝 ข้อผิดพลาดกำหนดเอง (Custom Defect)...</option>
+        </select>
+        <input type="text" id="edit-qc-custom-defect" placeholder="พิมพ์ระบุหัวข้อข้อผิดพลาดเฉพาะทาง..."
+          style="display:none; width:100%; background:#000; border:1px solid var(--warning); color:var(--warning); padding:8px 12px; border-radius:4px; font-size:13px;">
+      </div>
+
+      <div style="margin-bottom:12px;">
+        <label style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:4px;">หมายเหตุ / บันทึกรายละเอียดข้อผิดพลาด (Notes)</label>
+        <textarea id="edit-qc-notes" rows="2" placeholder="ระบุเหตุผล หรือการแก้ไขข้อผิดพลาด..."
+          style="width:100%; background:#000; border:1px solid var(--border); color:white; padding:8px 10px; border-radius:4px; font-size:13px; resize:vertical;"></textarea>
+      </div>
+
+      <div style="display:flex; gap:12px; margin-bottom:20px;">
+        <div style="flex:1;">
+          <label style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:4px;">ผู้ตรวจสอบ (Inspector)</label>
+          <input type="text" id="edit-qc-inspector" placeholder="ชื่อผู้ตรวจ"
+            style="width:100%; background:#000; border:1px solid var(--border); color:var(--accent-cyan); padding:8px 10px; border-radius:4px; font-size:13px;">
+        </div>
+        <div style="width:120px;">
+          <label style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:4px;">จำนวนตรวจ (ชิ้น)</label>
+          <input type="number" id="edit-qc-items" value="1" min="1"
+            style="width:100%; background:#000; border:1px solid var(--border); color:white; padding:8px 10px; border-radius:4px; font-size:13px; text-align:center;">
+        </div>
+      </div>
+
+      <div style="display:flex; justify-content:flex-end; gap:10px;">
+        <button onclick="Analytics.closeEditQCModal()" class="btn-action" style="background:transparent; border-color:var(--border); color:var(--text-muted);">ยกเลิก</button>
+        <button onclick="Analytics.saveEditQCLog()" class="btn-action" style="background:var(--success); color:white; font-weight:bold; padding:10px 20px;">
+          💾 บันทึกและอัปเดต KPI Dashboard
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: เติมสต็อกสินค้าด่วน (Quick Replenish Modal) -->
+  <div id="modal-quick-replenish" class="modal-overlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.8); z-index:9999; justify-content:center; align-items:center;">
+    <div style="background:var(--bg-surface); border:1px solid var(--border); border-radius:var(--radius-lg); width:90%; max-width:480px; padding:24px; box-shadow:0 20px 40px rgba(0,0,0,0.6);">
+      <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--border); padding-bottom:12px; margin-bottom:16px;">
+        <h3 style="margin:0; font-size:16px; color:var(--text-main); display:flex; align-items:center; gap:8px;">
+          🔄 เติมสต็อกสินค้าด่วน (Quick Restock)
+        </h3>
+        <button onclick="Inbound.closeReplenishModal()" style="background:none; border:none; color:var(--text-muted); font-size:20px; cursor:pointer;">&times;</button>
+      </div>
+
+      <input type="hidden" id="m-replenish-sku-id">
+
+      <div style="display:flex; gap:14px; background:rgba(0,0,0,0.3); border:1px solid var(--border); border-radius:8px; padding:12px; margin-bottom:16px; align-items:center;">
+        <img id="m-replenish-img" src="" style="width:60px; height:60px; border-radius:6px; object-fit:cover; border:1px solid #374151;">
+        <div style="flex:1;">
+          <strong id="m-replenish-sku-name" style="font-size:14px; color:var(--text-main); display:block;"></strong>
+          <div id="m-replenish-sku-code" style="font-size:11px; color:var(--accent-cyan); font-family:monospace; margin-top:2px;"></div>
+          <div style="display:flex; gap:12px; margin-top:6px; font-size:11px;">
+            <span>หน้าร้าน: <strong id="m-replenish-current-stock" style="color:var(--accent-orange);">0</strong></span>
+            <span>สำรอง: <strong id="m-replenish-current-reserve" style="color:var(--accent-cyan);">0</strong></span>
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-bottom:16px;">
+        <label style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:6px;">ปลายทางการเติมสต็อก</label>
+        <div style="display:flex; gap:16px;">
+          <label style="display:flex; align-items:center; gap:6px; cursor:pointer; font-size:13px;">
+            <input type="radio" name="m-replenish-target" value="stock" checked style="accent-color:var(--accent-orange);">
+            <span>สต็อกหน้าร้าน (Active)</span>
+          </label>
+          <label style="display:flex; align-items:center; gap:6px; cursor:pointer; font-size:13px;">
+            <input type="radio" name="m-replenish-target" value="reserve" style="accent-color:var(--accent-cyan);">
+            <span>สต็อกสำรอง (Reserve)</span>
+          </label>
+        </div>
+      </div>
+
+      <div style="margin-bottom:20px;">
+        <label style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:6px;">จำนวนที่ต้องการเติม (ชิ้น)*</label>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <input type="number" id="m-replenish-qty" value="10" min="1"
+            style="width:100px; background:#000; border:2px solid var(--accent-orange); color:var(--accent-orange); padding:8px; border-radius:4px; font-size:18px; font-weight:bold; text-align:center;">
+          <button class="btn-action" style="padding:6px 12px; font-size:12px; background:#1e293b; color:white;" onclick="document.getElementById('m-replenish-qty').value=5">+5</button>
+          <button class="btn-action" style="padding:6px 12px; font-size:12px; background:#1e293b; color:white;" onclick="document.getElementById('m-replenish-qty').value=10">+10</button>
+          <button class="btn-action" style="padding:6px 12px; font-size:12px; background:#1e293b; color:white;" onclick="document.getElementById('m-replenish-qty').value=25">+25</button>
+          <button class="btn-action" style="padding:6px 12px; font-size:12px; background:#1e293b; color:white;" onclick="document.getElementById('m-replenish-qty').value=50">+50</button>
+        </div>
+      </div>
+
+      <div style="display:flex; justify-content:flex-end; gap:10px;">
+        <button onclick="Inbound.closeReplenishModal()" class="btn-action" style="background:transparent; border-color:var(--border); color:var(--text-muted);">ยกเลิก</button>
+        <button onclick="Inbound.submitModalReplenish()" class="btn-action" style="background:var(--success); color:white; font-weight:bold; padding:10px 20px;">
+          📥 บันทึกการเติมสต็อก
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: ย้ายตำแหน่งสินค้าด่วน (Quick Relocate Modal) -->
+  <div id="modal-quick-relocate" class="modal-overlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.8); z-index:9999; justify-content:center; align-items:center;">
+    <div style="background:var(--bg-surface); border:1px solid var(--border); border-radius:var(--radius-lg); width:90%; max-width:520px; padding:24px; box-shadow:0 20px 40px rgba(0,0,0,0.6);">
+      <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--border); padding-bottom:12px; margin-bottom:16px;">
+        <h3 style="margin:0; font-size:16px; color:var(--text-main); display:flex; align-items:center; gap:8px;">
+          📍 ย้ายตำแหน่งสินค้าด่วน (Quick Relocate SKU)
+        </h3>
+        <button onclick="Inbound.closeQuickRelocateModal()" style="background:none; border:none; color:var(--text-muted); font-size:20px; cursor:pointer;">&times;</button>
+      </div>
+
+      <input type="hidden" id="qm-relocate-sku-id">
+
+      <div style="display:flex; gap:14px; background:rgba(0,0,0,0.3); border:1px solid var(--border); border-radius:8px; padding:12px; margin-bottom:16px; align-items:center;">
+        <img id="qm-relocate-img" src="" style="width:64px; height:64px; border-radius:6px; object-fit:cover; border:1px solid #374151;">
+        <div style="flex:1;">
+          <strong id="qm-relocate-sku-name" style="font-size:14px; color:var(--text-main); display:block;"></strong>
+          <div id="qm-relocate-sku-code" style="font-size:11px; color:var(--accent-cyan); font-family:monospace; margin-top:2px;"></div>
+          <div style="display:flex; gap:14px; margin-top:6px; font-size:12px;">
+            <span>พิกัดปัจจุบัน: <strong id="qm-relocate-current-loc" style="color:var(--accent-orange); font-family:monospace;"></strong></span>
+            <span>สต็อก: <strong id="qm-relocate-current-stock" style="color:var(--success);">0</strong></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Select Target Location -->
+      <div style="margin-bottom:16px; background:rgba(0,0,0,0.25); border:1px solid var(--border); border-radius:8px; padding:14px;">
+        <label style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:8px; font-weight:bold;">
+          🎯 ระบุพิกัดเป้าหมายใหม่ (Target Location)
+        </label>
+        <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-bottom:8px;">
+          <div>
+            <label style="font-size:11px; color:var(--text-muted); display:block; margin-bottom:4px;">โซน (Zone)</label>
+            <select id="qm-relocate-zone" style="width:100%; background:#000; border:1px solid var(--border); color:white; padding:8px; border-radius:4px; font-size:13px;">
+              <option value="A">Zone A</option>
+              <option value="B">Zone B</option>
+              <option value="C">Zone C</option>
+            </select>
+          </div>
+          <div>
+            <label style="font-size:11px; color:var(--text-muted); display:block; margin-bottom:4px;">แถว (Rack)</label>
+            <select id="qm-relocate-rack" style="width:100%; background:#000; border:1px solid var(--border); color:white; padding:8px; border-radius:4px; font-size:13px;">
+              <option value="01">Rack 01</option>
+              <option value="02">Rack 02</option>
+              <option value="03">Rack 03</option>
+              <option value="04">Rack 04</option>
+              <option value="05">Rack 05</option>
+              <option value="06">Rack 06</option>
+            </select>
+          </div>
+          <div>
+            <label style="font-size:11px; color:var(--text-muted); display:block; margin-bottom:4px;">ชั้น/ล็อก (Slot)</label>
+            <select id="qm-relocate-slot" style="width:100%; background:#000; border:1px solid var(--border); color:white; padding:8px; border-radius:4px; font-size:13px;">
+              <option value="01">Slot 01</option>
+              <option value="02">Slot 02</option>
+              <option value="03">Slot 03</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-bottom:20px;">
+        <label style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:6px;">เหตุผลในการย้าย (Optional)</label>
+        <input type="text" id="qm-relocate-reason" value="ย้ายปรับปรุงพื้นที่จัดเก็บ" placeholder="ระบุเหตุผล..."
+          style="width:100%; background:#000; border:1px solid var(--border); color:white; padding:8px 12px; border-radius:4px; font-size:13px;">
+      </div>
+
+      <div style="display:flex; justify-content:flex-end; gap:10px;">
+        <button onclick="Inbound.closeQuickRelocateModal()" class="btn-action" style="background:transparent; border-color:var(--border); color:var(--text-muted);">ยกเลิก</button>
+        <button onclick="Inbound.submitQuickRelocateModal()" class="btn-action" style="background:var(--accent-orange); color:white; font-weight:bold; padding:10px 20px;">
+          🚀 บันทึกการย้ายตำแหน่ง
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Application Modules with Cache-Buster -->
+  <script src="js/products-data.js?v=20261003_v3"></script>
+  <script src="js/api.js?v=20261003_v3"></script>
+  <script src="js/store.js?v=20261003_v3"></script>
+  <script src="js/picking.js?v=20261003_v3"></script>
+  <script src="js/pack.js?v=20261003_v3"></script>
+  <script src="js/barcodes.js?v=20261003_v3"></script>
+  <script src="js/analytics.js?v=20261003_v3"></script>
+  <script src="js/worker.js?v=20261003_v3"></script>
+  <script src="js/inbound.js?v=20261003_v3"></script>
+  <script src="js/procurement.js?v=20261003_v3"></script>
+  <script src="js/app.js?v=20261003_v3"></script>
+</body>
+
+</html>
